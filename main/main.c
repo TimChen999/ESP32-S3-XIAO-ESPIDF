@@ -8,6 +8,7 @@
 #include "sim_modem.h"
 #include "modem_driver.h"
 #include "network_app.h"
+#include "wifi_driver.h"
 
 // ============================================================================
 //  PIN & UART CONFIGURATION
@@ -123,31 +124,38 @@ void app_main(void)
     // --- Initialize network application layer (events, SNTP, etc.) ---
     network_app_init();
 
-    // --- Initialize both sides ---
-    sim_modem_init(&sim_modem_cfg);
-    modem_driver_init(&modem_driver_cfg);
+    // -----------------------------------------------------
+    // OPTION A: Test using Wi-Fi Driver
+    // -----------------------------------------------------
+    wifi_driver_init();
+
+    // -----------------------------------------------------
+    // OPTION B: Test using Cellular Modem Driver
+    // -----------------------------------------------------
+    // sim_modem_init(&sim_modem_cfg);
+    // modem_driver_init(&modem_driver_cfg);
 
     // --- Launch the simulated modem FIRST (it needs to be listening) ---
-    xTaskCreatePinnedToCore(
-        sim_modem_task,          // Task function
-        "sim_modem",             // Name (for debugging)
-        TASK_STACK_SIZE,         // Stack size in bytes
-        &sim_modem_cfg,          // Parameter passed to task
-        MODEM_SIM_PRIORITY,      // Priority
-        NULL,                    // Task handle (not needed)
-        MODEM_SIM_CORE           // Core to pin to
-    );
+    // xTaskCreatePinnedToCore(
+    //     sim_modem_task,          // Task function
+    //     "sim_modem",             // Name (for debugging)
+    //     TASK_STACK_SIZE,         // Stack size in bytes
+    //     &sim_modem_cfg,          // Parameter passed to task
+    //     MODEM_SIM_PRIORITY,      // Priority
+    //     NULL,                    // Task handle (not needed)
+    //     MODEM_SIM_CORE           // Core to pin to
+    // );
 
     // --- Then launch the driver/application ---
-    xTaskCreatePinnedToCore(
-        modem_driver_task,       // Task function
-        "modem_driver",          // Name
-        TASK_STACK_SIZE,         // Stack size
-        &modem_driver_cfg,       // Parameter passed to task
-        DRIVER_PRIORITY,         // Priority
-        NULL,                    // Task handle
-        DRIVER_CORE              // Core to pin to
-    );
+    // xTaskCreatePinnedToCore(
+    //     modem_driver_task,       // Task function
+    //     "modem_driver",          // Name
+    //     TASK_STACK_SIZE,         // Stack size
+    //     &modem_driver_cfg,       // Parameter passed to task
+    //     DRIVER_PRIORITY,         // Priority
+    //     NULL,                    // Task handle
+    //     DRIVER_CORE              // Core to pin to
+    // );
 
     // --- Launch the main application task (wait for network, sync time, HTTP) ---
     xTaskCreatePinnedToCore(
