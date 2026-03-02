@@ -7,6 +7,7 @@
 
 #include "sim_modem.h"
 #include "modem_driver.h"
+#include "network_app.h"
 
 // ============================================================================
 //  PIN & UART CONFIGURATION
@@ -119,6 +120,9 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    // --- Initialize network application layer (events, SNTP, etc.) ---
+    network_app_init();
+
     // --- Initialize both sides ---
     sim_modem_init(&sim_modem_cfg);
     modem_driver_init(&modem_driver_cfg);
@@ -143,6 +147,17 @@ void app_main(void)
         DRIVER_PRIORITY,         // Priority
         NULL,                    // Task handle
         DRIVER_CORE              // Core to pin to
+    );
+
+    // --- Launch the main application task (wait for network, sync time, HTTP) ---
+    xTaskCreatePinnedToCore(
+        network_app_task,
+        "app_task",
+        TASK_STACK_SIZE * 2,     // Need larger stack for HTTP
+        NULL,
+        DRIVER_PRIORITY - 1,     // Slightly lower priority than network driver
+        NULL,
+        DRIVER_CORE
     );
 
     ESP_LOGI(TAG, "Tasks launched. Returning to FreeRTOS scheduler.");
