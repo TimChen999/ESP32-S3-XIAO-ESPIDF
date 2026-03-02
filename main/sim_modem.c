@@ -98,7 +98,8 @@ static int read_line(sim_modem_config_t *config, char *buf, size_t buf_size,
 //  │ Command         │ Expected behavior                              │
 //  ├─────────────────┼────────────────────────────────────────────────┤
 //  │ "AT"            │ Reply "OK". Simplest ping — always works.      │
-//  │ "ATE0"          │ Reply "OK".    │
+//  │ "ATE0"          │ Reply "OK". Disable echo (echo_enabled = 0). │
+//  │ "ATE1"          │ Reply "OK". Re-enable echo (echo_enabled = 1).│
 //  │ "AT+CPIN?"      │ If state >= READY:                             │
 //  │                 │   Set state = SIM_READY                        │
 //  │                 │   Reply "+CPIN: READY\r\nOK"                   │
@@ -169,7 +170,7 @@ static sim_modem_state_t handle_at_command(sim_modem_config_t *config,
             config->state = SIM_MODEM_STATE_REGISTERED;
             send_response(config, "+CREG: 0,1\r\nOK"); // Not sending unsolicited updates, registered
         } else {
-            send_response(config, "+CREG: 0,0\r\nOK"); // Not sending unsolicitied updates, unregistered
+            send_response(config, "+CREG: 0,0\r\nOK"); // Not sending unsolicited updates, unregistered
         }
 
     // EPS registration — same behavior as CREG for our purposes.
@@ -220,12 +221,14 @@ static sim_modem_state_t handle_at_command(sim_modem_config_t *config,
 // ============================================================================
 //  PPP HELPERS & HANDLERS
 //
-//  Phase 2 flow after ATD*99# enters DATA_MODE:
-//    Step 1-2: Raw byte reading + HDLC frame collection (in handle_ppp_data_mode)
-//    Step 3:   LCP negotiation    — handle_lcp_frame()
-//    Step 4:   IPCP negotiation   — handle_ipcp_frame()
-//    Step 5-6: IP packet routing  — handle_ipv4_packet()
-//    Step 7:   +++ escape detect  — checked inline in handle_ppp_data_mode
+//  Phase 2 flow after ATD*99# enters DATA_MODE (FSM S5):
+//    S5.0: Byte read loop + unstuffing  — handle_ppp_data_mode()
+//    S5.1: Frame delimiter + accumulate — handle_ppp_data_mode()
+//    S5.2: Frame dispatch by protocol   — handle_ppp_data_mode()
+//    S5.3: LCP negotiation              — handle_lcp_frame()
+//    S5.4: IPCP negotiation             — handle_ipcp_frame()
+//    S5.5: IP packet routing            — handle_ipv4_packet()
+//    S5.6: +++ escape detection         — handle_ppp_data_mode()
 // ============================================================================
 
 // Simulated IP addresses assigned during IPCP
@@ -367,7 +370,7 @@ static unsigned short ip_checksum(const unsigned char *data, size_t len)
 }
 
 // ---------------------------------------------------------------------------
-//  handle_lcp_frame  (Step 3)
+//  handle_lcp_frame  (FSM S5.3)
 //  After ATD*99# enters DATA_MODE, LCP is the first PPP control protocol.
 //  Must complete before IPCP can assign IP addresses.
 //
@@ -389,7 +392,7 @@ static void handle_lcp_frame(sim_modem_config_t *config,
 {
     ESP_LOGI(TAG, "PPP frame complete: LCP (len=%u)", (unsigned int)frame_len);
 
-    // Step 3: LCP negotiation (minimal implementation).
+    // S5.3: LCP negotiation (minimal implementation).
     // Parse LCP Config-Request from the driver and send:
     //   1) LCP Config-Ack (echo options back with code=2)
     //   2) Our own LCP Config-Request (MRU=1500)
@@ -460,7 +463,7 @@ static void handle_lcp_frame(sim_modem_config_t *config,
 }
 
 // ---------------------------------------------------------------------------
-//  handle_ipcp_frame  (Step 4)
+//  handle_ipcp_frame  (FSM S5.4)
 //  After LCP opens, IPCP assigns IP addresses. This is the PPP equivalent
 //  of DHCP — the modem tells the driver what IP to use.
 //
@@ -570,7 +573,7 @@ static void handle_ipcp_frame(sim_modem_config_t *config,
 }
 
 // ---------------------------------------------------------------------------
-//  handle_ipv4_packet  (Steps 5 & 6)
+//  handle_ipv4_packet  (FSM S5.5)
 //  After IPCP opens, real IP packets arrive wrapped in PPP frames.
 //  Extract IP header, dispatch by protocol: ICMP, UDP (DNS), TCP.
 //
@@ -615,7 +618,7 @@ static void handle_ipv4_packet(sim_modem_config_t *config,
 
     // Is this ICMP (protocol=1) with enough bytes for the ICMP header (8 bytes after IP header)?
     if (protocol == 1 && ip_len >= (size_t)(ip_hdr_len + 8)) {
-        // Step 6a: ICMP — respond to echo request (ping).
+        // S5.5a: ICMP — respond to echo request (ping).
         // ICMP header: [0:1, type] [1:2, code] [2:4, checksum] [4:8, id+seq]
         const unsigned char *icmp = &ip[ip_hdr_len];
         // Type 8 = Echo Request (ping), Type 0 = Echo Reply (pong).
@@ -659,7 +662,7 @@ static void handle_ipv4_packet(sim_modem_config_t *config,
 
     // Is this UDP (protocol=17) with enough bytes for the UDP header (8 bytes after IP header)?
     } else if (protocol == 17 && ip_len >= (size_t)(ip_hdr_len + 8)) {
-        // Step 6b: UDP — check for DNS queries (dst port 53).
+        // S5.5b: UDP — check for DNS queries (dst port 53).
         // UDP header: [0:2, src port] [2:4, dst port] [4:6, length] [6:8, checksum]
         // DNS payload starts at udp[8].
         const unsigned char *udp = &ip[ip_hdr_len];
@@ -764,7 +767,7 @@ static void handle_ipv4_packet(sim_modem_config_t *config,
 
     // Is this TCP (protocol=6) with enough bytes for the TCP header (20 bytes min after IP header)?
     } else if (protocol == 6 && ip_len >= (size_t)(ip_hdr_len + 20)) {
-        // Step 6c: TCP — detect SYN and perform 3-way handshake stub.
+        // S5.5c: TCP — detect SYN and perform 3-way handshake stub.
         // TCP header: [0:2, src port] [2:4, dst port] [4:8, seq num] [8:12, ack num] [13:14, flags]
         // Flags: SYN=0x02, ACK=0x10, SYN+ACK=0x12, FIN=0x01, RST=0x04
         const unsigned char *tcp = &ip[ip_hdr_len];
@@ -949,17 +952,17 @@ static void handle_ppp_data_mode(sim_modem_config_t *config)
     // receive stuffed bytes from the MCU and unstuff before parsing.
     int in_escaped = 0;
 
-    // Step 7: Track consecutive '+' for escape (return to AT mode).
+    // S5.6: Track consecutive '+' for escape (return to AT mode).
     int plus_count = 0;
 
     ESP_LOGI(TAG, "Entered PPP data mode — collecting HDLC frames");
 
     while (config->state == SIM_MODEM_STATE_DATA_MODE) {
-        // Step 1: Read raw bytes from UART (PPP is binary, not line-based).
+        // S5.0: Read raw bytes from UART (PPP is binary, not line-based).
         int got = uart_read_bytes(config->uart_num, &byte, 1, pdMS_TO_TICKS(200));
         if (got <= 0) {
             // Idle timeout: no bytes right now.
-            // Step 7: if we saw 3 '+' and then silence, escape to AT mode.
+            // S5.6: if we saw 3 '+' and then silence, escape to AT mode.
             if (plus_count >= 3) {
                 ESP_LOGI(TAG, "+++ escape detected — returning to AT command mode");
                 config->state = SIM_MODEM_STATE_PDP_ACTIVE;
@@ -968,7 +971,7 @@ static void handle_ppp_data_mode(sim_modem_config_t *config)
             continue;
         }
 
-        // Step 7: track '+' bytes for escape sequence.
+        // S5.6: track '+' bytes for escape sequence.
         if (byte == '+') {
             plus_count++;
             if (plus_count < 3) continue;
@@ -989,13 +992,13 @@ static void handle_ppp_data_mode(sim_modem_config_t *config)
             continue;
         }
 
-        // Frame delimiter: 0x7E (after unstuffing) marks frame boundaries.
+        // S5.1: Frame delimiter — 0x7E (after unstuffing) marks frame boundaries.
         if (byte == PPP_FLAG_BYTE) {
             if (frame_len == 0) {
                 continue;
             }
 
-            // Complete frame. PPP header: Address(0xFF), Control(0x03), Protocol(2B).
+            // S5.2: Frame dispatch. PPP header: Address(0xFF), Control(0x03), Protocol(2B).
             if (frame_len >= 4 && frame_buf[0] == 0xFF && frame_buf[1] == 0x03) {
                 unsigned short protocol = ((unsigned short)frame_buf[2] << 8) | frame_buf[3];
 

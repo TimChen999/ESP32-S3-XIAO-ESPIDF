@@ -228,10 +228,11 @@ decision tree on every byte:
 
 ### S5.0: Byte Read Loop
 
-**High-level:** We read one byte at a time from the UART. Each byte is either part of the +++ escape (count consecutive '+'), part of a PPP frame (accumulate until 0x7E), or filler. **What changes:** Three '+' followed by a timeout triggers escape (state → PDP_ACTIVE, return). A 0x7E with data already in the buffer completes a frame and we dispatch it (S5.2). Any other byte either resets the plus counter or is appended to the frame buffer.
+**High-level:** We read one byte at a time from the UART. Each byte is either part of the +++ escape (count consecutive '+'), a PPP escape sequence (0x7D byte-stuffing per RFC 1662), part of a PPP frame (accumulate until 0x7E), or filler. **What changes:** Three '+' followed by a timeout triggers escape (state → PDP_ACTIVE, return). Escape bytes (0x7D) set an `in_escaped` flag so the next byte is XOR'd with 0x20 (unstuffed) before processing. A 0x7E with data already in the buffer completes a frame and we dispatch it (S5.2). Any other byte either resets the plus counter or is appended to the frame buffer.
 
 ```
 Input:        Single byte from uart_read_bytes (200ms timeout)
+State:        in_escaped flag (for RFC 1662 byte unstuffing)
 ```
 
 | Condition | Action | Next |
@@ -240,7 +241,10 @@ Input:        Single byte from uart_read_bytes (200ms timeout)
 | Timeout (got <= 0), plus_count < 3 | Continue waiting | → S5.0 |
 | byte == '+' | plus_count++; if < 3 continue | → S5.0 |
 | byte == '+', plus_count reaches 3 | Wait for silence (next timeout) | → S5.0 |
-| byte != '+' | plus_count = 0; fall through | → S5.1 |
+| byte != '+' | plus_count = 0; fall through to unstuffing | |
+| in_escaped == true | byte ^= 0x20 (unstuff); in_escaped = false; fall through | → S5.1 |
+| byte == 0x7D (PPP escape byte) | in_escaped = true; continue (consume escape marker) | → S5.0 |
+| other byte | Fall through directly | → S5.1 |
 
 ---
 
@@ -293,10 +297,11 @@ Input:            LCP frame: [4:5, code] [5:6, id] [6:8, length] [8:..., options
 | Condition | Action | Output |
 |---|---|---|
 | frame_len < 8 | Log "too short" | None |
-| code != 0x01 OR length invalid | Log "not valid Config-Request" | None |
 | code == 0x01, valid length | **Two outputs:** | |
 | | 1. Send Config-Ack (echo driver's options back with code=0x02) | `[0x7E] [0xFF 0x03 0xC021] [0x02 id len options] [0x7E]` |
 | | 2. Send our Config-Request (MRU=1500) | `[0x7E] [0xFF 0x03 0xC021] [0x01 id 0x0008 0x01 0x04 0x05DC] [0x7E]` |
+| code == 0x05, valid length | Send Terminate-Ack (echo back with code=0x06) | `[0x7E] [0xFF 0x03 0xC021] [0x06 id len data] [0x7E]` |
+| other code or invalid length | Log "unhandled code" | None |
 
 **Config-Ack frame structure:**
 
@@ -322,9 +327,8 @@ Input:            LCP frame: [4:5, code] [5:6, id] [6:8, length] [8:..., options
 | Config-Nak (code 0x03) | Modem wants a different value for an option (e.g. smaller MRU) | Accept suggested value, resend Config-Request with it |
 | No Config-Ack received | Modem never Acks our Config-Request (timeout) | Retransmit Config-Request up to 10 times, then fail |
 | LCP Echo-Request (code 0x09) | Modem sends keepalive pings during established link | Must reply with Echo-Reply (code 0x0A) or modem closes link |
-| LCP Terminate-Request (code 0x05) | Modem wants to close the PPP link | Send Terminate-Ack (code 0x06), transition back to AT mode |
-| Byte-stuffed frames | Real PPP escapes 0x7E→0x7D 0x5E and 0x7D→0x7D 0x5D inside frames | Driver/modem must unstuff before parsing and stuff before sending |
-| FCS (CRC-16) appended to frames | Real PPP frames end with 2-byte CRC before closing 0x7E | Must verify FCS on received frames, append FCS on sent frames |
+
+**Note:** The sim now implements byte-stuffing (RFC 1662: 0x7E→0x7D 0x5E, 0x7D→0x7D 0x5D, and chars < 0x20) and FCS (CRC-16) on sent frames, and unstuffs received frames. LCP Terminate-Request (code 0x05) is handled by the sim — it replies with Terminate-Ack (code 0x06).
 
 ---
 
@@ -347,7 +351,7 @@ Input:            IPCP frame: [4:5, code] [5:6, id] [6:8, length] [8:..., option
 | code == 0x02 | Config-Ack from driver (accepted our IP) | Log "IP layer is up" |
 | code == 0x01, IP option == 10.0.0.2 | Accept → send Config-Ack | Ack frame (proto=0x8021, code=0x02) |
 | code == 0x01, IP option != 10.0.0.2 | Reject → send Config-Nak with 10.0.0.2 | Nak frame (proto=0x8021, code=0x03) |
-| (after Ack or Nak) | Send our own Config-Request | Request with modem IP + DNS |
+| (after Ack or Nak) | Send our own Config-Request | Request with modem IP |
 
 **Config-Nak frame (suggesting 10.0.0.2):**
 
@@ -357,13 +361,11 @@ Input:            IPCP frame: [4:5, code] [5:6, id] [6:8, length] [8:..., option
 [8:14, IP-Address option: type=0x03 len=6 val=10.0.0.2]
 ```
 
-**Our Config-Request frame (modem IP + DNS):**
+**Our Config-Request frame (modem IP only):**
 
 ```
-[0:4, PPP hdr] [4:5, 0x01 Config-Req] [5:6, id] [6:8, length=22]
-[8:14,  IP-Address opt:   type=0x03 len=6 val=10.0.0.1]
-[14:20, Primary DNS opt:  type=0x81 len=6 val=10.0.0.1]
-[20:26, Secondary DNS opt: type=0x83 len=6 val=10.0.0.1]
+[0:4, PPP hdr] [4:5, 0x01 Config-Req] [5:6, id] [6:8, length=10]
+[8:14, IP-Address opt: type=0x03 len=6 val=10.0.0.1]
 ```
 
 **Typical IPCP exchange sequence:**
@@ -371,7 +373,7 @@ Input:            IPCP frame: [4:5, code] [5:6, id] [6:8, length] [8:..., option
 ```
 Driver → Modem:  Config-Request (IP=0.0.0.0)
 Modem  → Driver: Config-Nak (use 10.0.0.2)
-Modem  → Driver: Config-Request (modem=10.0.0.1, DNS=10.0.0.1)
+Modem  → Driver: Config-Request (modem=10.0.0.1)
 Driver → Modem:  Config-Request (IP=10.0.0.2)
 Modem  → Driver: Config-Ack (accepted)
 Driver → Modem:  Config-Ack (accepted modem's IP)

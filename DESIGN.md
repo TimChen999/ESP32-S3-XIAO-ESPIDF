@@ -209,7 +209,7 @@ pass these to `uart_set_pin()` instead of `UART_PIN_NO_CHANGE`, and set
 
 ## Phase 1: AT Command Phase — State by State
 
-### State 0: OFF / IDLE (Power-On)
+### Step 1 (S0 → S1): Power-On / Boot
 
 ```
 Networking layer:  Layer 1 — Physical
@@ -232,7 +232,7 @@ Driver delays 3s (waiting for modem boot) then starts sending commands.
 
 ---
 
-### State 1: READY / SIM Check
+### Step 2a (S1 → S2): SIM Check
 
 ```
 Networking layer:  Control Plane (out-of-band management)
@@ -280,7 +280,7 @@ What happens:      Driver verifies the modem is alive and the SIM card is valid.
 
 ---
 
-### State 2: REGISTERED / Network Registration
+### Step 2b (S2 → S3): Network Registration
 
 ```
 Networking layer:  Still Control Plane, but now touching Layer 2/3 concepts.
@@ -337,7 +337,7 @@ What happens:      The modem searches for a cell tower, authenticates with
 
 ---
 
-### State 3: PDP_ACTIVE / Data Bearer Setup
+### Step 2c (S3 → S4): Data Bearer Setup (PDP Context)
 
 ```
 Networking layer:  Layer 3 — Network (IP address assignment begins here)
@@ -386,7 +386,7 @@ What happens:      A PDP (Packet Data Protocol) context is activated.
 
 ---
 
-### State 4: DATA_MODE / Enter PPP
+### Step 2d (S4 → S5): Enter PPP (DATA_MODE)
 
 ```
 Networking layer:  Layer 2 — Data Link (PPP begins here)
@@ -486,7 +486,7 @@ Every PPP frame is wrapped in HDLC (High-Level Data Link Control):
     └───────────────────┘
 ```
 
-### PPP Step 1: LCP Negotiation (Layer 2 — Data Link)
+### Phase 2.4 (S5.3): LCP Negotiation (Layer 2 — Data Link)
 
 ```
 Networking layer:  Layer 2 — Data Link (configuring the link itself)
@@ -507,13 +507,16 @@ Protocol ID:       0xC021
 ```
 Input:   Raw bytes from UART — look for 0x7E frame delimiters
          Parse HDLC: strip flag, check protocol field = 0xC021
-         Parse LCP: code=1 (Config-Request), id, options
+         Parse LCP: check code (1 = Config-Request, 5 = Terminate-Request)
 
-Output:  LCP Config-Ack: same options echoed back, code=2
-         Then send our own LCP Config-Request: code=1, our options
+Output:  If Config-Request: 
+           Send LCP Config-Ack: same options echoed back, code=2
+           Then send our own LCP Config-Request: code=1, our options
+         If Terminate-Request:
+           Send LCP Terminate-Ack: same data echoed back, code=6
 
-Trigger: Receiving a valid LCP Config-Request
-Result:  Both sides have agreed on link parameters. Link is "opened."
+Trigger: Receiving a valid LCP frame
+Result:  Both sides have agreed on link parameters. Link is "opened." Or, if Terminate is received, the link is closed.
 ```
 
 **Networking lesson:** Every Layer 2 protocol has a negotiation phase. Ethernet
@@ -522,12 +525,12 @@ The point is always the same: agree on the rules before sending data.
 
 ---
 
-### PPP Step 2: IPCP Negotiation (Layer 3 — Network)
+### Phase 2.4 (S5.4): IPCP Negotiation (Layer 3 — Network)
 
 ```
 Networking layer:  Layer 3 — Network (IP address assignment)
 What happens:      The driver requests an IP address. The modem (acting as
-                   the network) assigns one. Also negotiates DNS servers.
+                   the network) assigns one.
                    This is the PPP equivalent of DHCP.
 Protocol ID:       0x8021
 ```
@@ -538,7 +541,7 @@ Protocol ID:       0x8021
 | 2 | Modem → Driver | IPCP Config-Nak: "No, use 10.0.0.2 instead" |
 | 3 | Driver → Modem | IPCP Config-Request: "I want IP 10.0.0.2" (accepted the suggestion) |
 | 4 | Modem → Driver | IPCP Config-Ack: "Confirmed, you are 10.0.0.2" |
-| 5 | Modem → Driver | IPCP Config-Request: "My IP is 10.0.0.1, DNS is 10.0.0.1" |
+| 5 | Modem → Driver | IPCP Config-Request: "My IP is 10.0.0.1" |
 | 6 | Driver → Modem | IPCP Config-Ack: "Confirmed" |
 
 **What to implement (sim_modem side):**
@@ -551,13 +554,12 @@ Logic:   If requested IP is 0.0.0.0:
            Send Config-Nak (code=3) with IP 10.0.0.2 (the IP we're assigning)
          If requested IP is 10.0.0.2:
            Send Config-Ack (code=2) — accept it
-         Also send our own Config-Request with our IP (10.0.0.1) and DNS
+         Also send our own Config-Request with our IP (10.0.0.1)
 
 Output:  IPCP frames back through UART
 
 Trigger: Receiving IPCP Config-Request
 Result:  Driver has IP 10.0.0.2, modem has IP 10.0.0.1
-         DNS server is 10.0.0.1 (modem will answer DNS queries itself)
 ```
 
 **Networking lesson:** At Layer 3, every device needs a unique address. On
@@ -572,7 +574,7 @@ over the UART automatically.
 
 ---
 
-### PPP Step 3: IP Packet Forwarding (Layers 3-7)
+### Phase 2.6 (S5.5): IP Packet Forwarding (Layers 3-7)
 
 ```
 Networking layer:  Layer 3 (IP) → Layer 4 (TCP/UDP) → Layer 7 (App)
@@ -654,30 +656,30 @@ when implementing.
 
 ### Driver FSM (modem_driver.c)
 
-| # | From State | To State | Trigger | Function | What crosses the UART | Layer |
+| Step / FSM | From State | To State | Trigger | Function | What crosses the UART | Layer |
 |---|---|---|---|---|---|---|
-| 1 | — | IDLE | `modem_driver_init()` called | `modem_driver_init` | Nothing (UART setup) | L1 |
-| 2 | IDLE | SIM_OK | AT+CPIN returns READY | `modem_check_sim` | AT, ATE0, AT+CPIN? → OK, OK, +CPIN: READY | Control |
-| 3 | IDLE | ERROR | AT gets no response (5 retries) | `modem_check_sim` | AT → (silence) | Control |
-| 4 | IDLE | ERROR | AT+CPIN returns not READY | `modem_check_sim` | AT+CPIN? → +CPIN: SIM PIN | Control |
-| 5 | SIM_OK | REGISTERED | AT+CREG returns 0,1 | `modem_register_network` | AT+CSQ, AT+CREG?, AT+COPS? → responses | Control |
-| 6 | SIM_OK | ERROR | AT+CREG returns 0,3 (denied) | `modem_register_network` | AT+CREG? → +CREG: 0,3 | Control |
-| 7 | REGISTERED | PDP_ACTIVE | AT+CGACT returns OK | `modem_activate_pdp` | AT+CGDCONT, AT+CGACT → OK, OK | L3 |
-| 8 | PDP_ACTIVE | DATA_MODE | ATD*99# returns CONNECT | `modem_enter_data_mode` | ATD*99# → CONNECT 115200 | L2 |
-| 9 | DATA_MODE | (lwIP) | PPP negotiation completes | (Phase 2) | LCP + IPCP binary frames | L2-L3 |
+| Step 1 (S0→S1) | — | IDLE | `modem_driver_init()` called | `modem_driver_init` | Nothing (UART setup) | L1 |
+| Step 2a (S1→S2) | IDLE | SIM_OK | AT+CPIN returns READY | `modem_check_sim` | AT, ATE0, AT+CPIN? → OK, OK, +CPIN: READY | Control |
+| Step 2a (S1→S1) | IDLE | ERROR | AT gets no response (5 retries) | `modem_check_sim` | AT → (silence) | Control |
+| Step 2a (S1→S1) | IDLE | ERROR | AT+CPIN returns not READY | `modem_check_sim` | AT+CPIN? → +CPIN: SIM PIN | Control |
+| Step 2b (S2→S3) | SIM_OK | REGISTERED | AT+CREG returns 0,1 | `modem_register_network` | AT+CSQ, AT+CREG?, AT+COPS? → responses | Control |
+| Step 2b (S2→S2) | SIM_OK | ERROR | AT+CREG returns 0,3 (denied) | `modem_register_network` | AT+CREG? → +CREG: 0,3 | Control |
+| Step 2c (S3→S4) | REGISTERED | PDP_ACTIVE | AT+CGACT returns OK | `modem_activate_pdp` | AT+CGDCONT, AT+CGACT → OK, OK | L3 |
+| Step 2d (S4→S5) | PDP_ACTIVE | DATA_MODE | ATD*99# returns CONNECT | `modem_enter_data_mode` | ATD*99# → CONNECT 115200 | L2 |
+| Phase 2 (S5) | DATA_MODE | (lwIP) | PPP negotiation completes | (Phase 2) | LCP + IPCP binary frames | L2-L3 |
 
 ### Modem FSM (sim_modem.c)
 
-| # | From State | To State | Trigger | Handler | Response sent | Layer |
+| Step / FSM | From State | To State | Trigger | Handler | Response sent | Layer |
 |---|---|---|---|---|---|---|
-| 1 | OFF | READY | Boot delay expires | `sim_modem_task` | Nothing (internal transition) | L1 |
-| 2 | READY | SIM_READY | Receives AT+CPIN? | `handle_at_command` | +CPIN: READY\r\nOK | Control |
-| 3 | SIM_READY | REGISTERED | Receives AT+CREG? | `handle_at_command` | +CREG: 0,1\r\nOK | Control |
-| 4 | REGISTERED | PDP_ACTIVE | Receives AT+CGACT=1,1 | `handle_at_command` | OK | L3 |
-| 5 | PDP_ACTIVE | DATA_MODE | Receives ATD*99# | `handle_at_command` | CONNECT 115200 | L2 |
-| 6 | DATA_MODE | (PPP) | Receives LCP Config-Req | `handle_ppp_data_mode` | LCP Config-Ack + Config-Req | L2 |
-| 7 | DATA_MODE | (PPP) | Receives IPCP Config-Req | `handle_ppp_data_mode` | IPCP Config-Nak/Ack | L3 |
-| 8 | DATA_MODE | (PPP) | Receives IPv4 packet | `handle_ppp_data_mode` | ICMP reply / TCP response | L3-L7 |
+| Step 1 (S0→S1) | OFF | READY | Boot delay expires | `sim_modem_task` | Nothing (internal transition) | L1 |
+| Step 2a (S1→S2) | READY | SIM_READY | Receives AT+CPIN? | `handle_at_command` | +CPIN: READY\r\nOK | Control |
+| Step 2b (S2→S3) | SIM_READY | REGISTERED | Receives AT+CREG? | `handle_at_command` | +CREG: 0,1\r\nOK | Control |
+| Step 2c (S3→S4) | REGISTERED | PDP_ACTIVE | Receives AT+CGACT=1,1 | `handle_at_command` | OK | L3 |
+| Step 2d (S4→S5) | PDP_ACTIVE | DATA_MODE | Receives ATD*99# | `handle_at_command` | CONNECT 115200 | L2 |
+| Phase 2.4 (S5.3) | DATA_MODE | (PPP) | Receives LCP Config-Req | `handle_ppp_data_mode` | LCP Config-Ack + Config-Req | L2 |
+| Phase 2.4 (S5.4) | DATA_MODE | (PPP) | Receives IPCP Config-Req | `handle_ppp_data_mode` | IPCP Config-Nak/Ack | L3 |
+| Phase 2.6 (S5.5) | DATA_MODE | (PPP) | Receives IPv4 packet | `handle_ppp_data_mode` | ICMP reply / TCP response | L3-L7 |
 
 ---
 
@@ -729,23 +731,58 @@ when implementing.
 Work through these in order. Each step builds on the previous one, and each
 step gives you a testable checkpoint.
 
-| Step | What to implement | How to verify it works |
+| Step / Phase | What to implement | How to verify it works |
 |---|---|---|
-| 1 | `sim_modem_init()` + `modem_driver_init()` — UART setup | Console prints config. No crashes. |
-| 2 | `send_response()` + `read_line()` in sim_modem.c | Modem can read a line and echo it back |
-| 3 | `send_command_raw()` + `read_response()` in modem_driver.c | Driver can send "AT" and receive bytes |
-| 4 | `handle_at_command()` — just "AT" → "OK" | Console shows: TX "AT", RX "OK" |
-| 5 | `modem_check_sim()` + remaining AT commands | Console shows: "SIM OK" |
-| 6 | `modem_register_network()` | Console shows: "Registered, RSSI=20, Op=Fake Cellular" |
-| 7 | `modem_activate_pdp()` | Console shows: "PDP active" |
-| 8 | `modem_enter_data_mode()` | Console shows: "CONNECT — entered data mode" |
-| 9 | PPP LCP negotiation | Both sides log "LCP opened" |
-| 10 | PPP IPCP negotiation | Driver logs "Got IP: 10.0.0.2" |
-| 11 | ICMP ping response | Driver pings 10.0.0.1, gets reply |
-| 12 | DNS response | Driver resolves "example.com" → canned IP |
-| 13 | TCP 3-way handshake | Driver connects to canned IP:80, handshake completes |
-| 14 | HTTP response | Driver sends GET, receives canned HTML |
+| Step 1 | `sim_modem_init()` + `modem_driver_init()` — UART setup | Console prints config. No crashes. |
+| Step 2a-1 | `send_response()` + `read_line()` in sim_modem.c | Modem can read a line and echo it back |
+| Step 2a-2 | `send_command_raw()` + `read_response()` in modem_driver.c | Driver can send "AT" and receive bytes |
+| Step 2a-3 | `handle_at_command()` — just "AT" → "OK" | Console shows: TX "AT", RX "OK" |
+| Step 2a-4 | `modem_check_sim()` + remaining AT commands | Console shows: "SIM OK" |
+| Step 2b | `modem_register_network()` | Console shows: "Registered, RSSI=20, Op=Fake Cellular" |
+| Step 2c | `modem_activate_pdp()` | Console shows: "PDP active" |
+| Step 2d | `modem_enter_data_mode()` | Console shows: "CONNECT — entered data mode" |
+| Phase 2.4 | PPP LCP negotiation (S5.3) | Both sides log "LCP opened" |
+| Phase 2.4 | PPP IPCP negotiation (S5.4) | Driver logs "Got IP: 10.0.0.2" |
+| Phase 2.6 | ICMP ping response (S5.5a) | Driver pings 10.0.0.1, gets reply |
+| Phase 2.6 | DNS response (S5.5b) | Driver resolves "example.com" → canned IP |
+| Phase 2.6 | TCP 3-way handshake (S5.5c) | Driver connects to canned IP:80, handshake completes |
+| Phase 2.6 | HTTP response (S5.5c) | Driver sends GET, receives canned HTML |
 
-After step 8, you've completed Phase 1. Steps 9-14 are Phase 2 (PPP).
-Each step teaches you a new networking layer by forcing you to implement
+After Step 2d, you've completed Phase 1 (AT commands). The remaining phases are Phase 2 (PPP).
+Each phase teaches you a new networking layer by forcing you to implement
 the protocol that runs at that layer.
+
+---
+
+## Moving to Real Hardware: Modem Setup Differences
+
+The `modem_driver` code is currently **highly generic** and is equipped to deal with almost **any standard 3GPP-compliant cellular modem** that supports PPP (Point-to-Point Protocol). Because it uses universal 3GPP standard AT commands (`AT`, `AT+CPIN?`, `AT+CSQ`, `AT+CREG?`, `AT+CGDCONT`, `AT+CGACT`, and `ATD*99#`), this driver would work out-of-the-box (or with very minimal tweaks) on popular modules like:
+* **SIMCom:** SIM7600, SIM800, SIM7000
+* **Quectel:** BG96, EC21, EG91, MC60
+* **u-blox:** SARA-R4, SARA-U2
+
+However, in the real world, hardware manufacturers deviate slightly or require hardware-specific sequences. If you swap the simulated modem for a real physical modem, here are the likely differences you'll need to address in your driver code implementation:
+
+### 1. Hardware Power-On / Reset Sequences
+The simulator driver currently just waits 3 seconds for the modem to boot.
+* **Real Modems:** Almost all physical modems require toggling a specific hardware GPIO pin (often called `PWRKEY`, `PWR_EN`, or `RESET`) to turn them on. You would need to add GPIO configuration to your init phase and toggle the pin high for ~500ms (check the specific datasheet) before starting the `AT` ping loop. Boot times can also vary wildly (5 to 15 seconds).
+
+### 2. Network Registration Commands (CREG vs CEREG)
+The code uses `AT+CREG?`, which checks for Circuit Switched (2G/3G) registration.
+* **Real Modems:** If you are using an LTE, LTE-M, or NB-IoT modem (like a Quectel BG96 or SIM7000), they register on the EPS (Evolved Packet System). For these, you must poll `AT+CEREG?` instead of (or in addition to) `AT+CREG?`. Some GPRS modems require `AT+CGREG?`.
+
+### 3. Baud Rate and Auto-Bauding
+The init code assumes a fixed baud rate that both sides agree on immediately.
+* **Real Modems:** Many modems ship with "auto-bauding" enabled. To sync the baud rate, your driver might need to spam the `AT` command 5–10 times rapidly at the start so the modem's hardware UART can detect the bit timing and lock in the 115200 baud rate.
+
+### 4. Exiting Data Mode (Escape Sequences)
+The driver uses the standard Hayes escape sequence (`+++`) with a 1-second guard time to drop from PPP data mode back to AT command mode.
+* **Real Modems:** While `+++` is standard, it is notoriously finicky regarding timing and can be accidentally triggered by payload data. Many modern modems allow (or prefer) you to exit data mode by briefly dropping the hardware `DTR` (Data Terminal Ready) pin. If you switch to DTR dropping, you would need to route the DTR pin in `uart_set_pin` and use GPIO commands to pull it low to escape.
+
+### 5. PDP Context and Dial Strings
+The driver uses `AT+CGDCONT=1,"IP","internet"` and dials `ATD*99#`.
+* **Real Modems:** The APN (`"internet"`) will need to be configurable based on the user's SIM card provider (e.g., Hologram, Twilio, AT&T). Additionally, some modems require specific dial strings like `ATD*99***1#` to explicitly route the call to PDP context 1.
+
+### 6. PPP vs Built-in Stacks
+This driver uses **PPP (Point-to-Point Protocol)**. This is a great, standard approach because it integrates perfectly with the ESP-IDF `lwIP` stack, allowing you to use standard C sockets.
+* **Real Modems:** PPP requires the ESP32 to do the heavy lifting of TCP/IP framing, which is CPU and memory intensive. Almost all cellular modems also contain their own internal TCP/IP stacks. Instead of entering PPP mode, you could use modem-specific AT commands to send data (e.g., SIMCom's `AT+CIPSTART` and `AT+CIPSEND`, or Quectel's `AT+QIOPEN`). This offloads the TCP/IP processing to the modem, but forces you to rewrite your app layer to use AT commands instead of standard POSIX sockets. Since you are using ESP-IDF, sticking with PPP is generally the preferred architecture.

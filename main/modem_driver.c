@@ -212,7 +212,7 @@ int modem_check_sim(modem_driver_config_t *config)
     TickType_t at_timeout = pdMS_TO_TICKS(4000);
 
     // -----------------------------------------------------------------------
-    // Step 1: Ping the modem with "AT".
+    // Step 1 (S1): Ping the modem with "AT".
     // Retry up to 5 times with 1s delay — modem may still be booting.
     // -----------------------------------------------------------------------
     for (int i = 0; i < 5; i++) {
@@ -237,7 +237,7 @@ int modem_check_sim(modem_driver_config_t *config)
     bool echohandling = true;
 
     // -----------------------------------------------------------------------
-    // Step 2: Disable echo with "ATE0".
+    // Step 2 (S1): Disable echo with "ATE0".
     // If it fails after 3 tries we continue anyway — read_response handles
     // echo by scanning for terminators; we just log and proceed.
     // -----------------------------------------------------------------------
@@ -256,7 +256,7 @@ int modem_check_sim(modem_driver_config_t *config)
     if (echohandling) ESP_LOGW(TAG, "Echo disable failed, continuing with echo handling");
 
     // -----------------------------------------------------------------------
-    // Step 3: Check SIM with "AT+CPIN?".
+    // Step 3 (S1→S2): Check SIM with "AT+CPIN?".
     // READY → success. SIM PIN → send PIN (DEFAULT_SIM_PIN), then success if OK.
     // SIM PUK / CME 10 (no SIM) / CME 13 (SIM failure) → fatal (return -1).
     // -----------------------------------------------------------------------
@@ -311,7 +311,7 @@ int modem_register_network(modem_driver_config_t *config)
 
     TickType_t at_timeout = pdMS_TO_TICKS(2000);
 
-    // Step 1: Check signal quality (informational; we log RSSI/BER).
+    // Step 1 (S2): Check signal quality (informational; we log RSSI/BER).
     int n = modem_send_at(config, "AT+CSQ", resp, sizeof(resp), at_timeout);
     if (n >= 0) {
         const char *csq = strstr(resp, "+CSQ:");
@@ -320,7 +320,7 @@ int modem_register_network(modem_driver_config_t *config)
         }
     }
 
-    // Step 2: Poll registration status. CREG second value: 1 = home, 5 = roaming,
+    // Step 2 (S2→S3): Poll registration status. CREG second value: 1 = home, 5 = roaming,
     // 2 = searching, 3 = denied. We retry up to 10 times; if 2, wait 2s and continue.
     for (int i = 0; i < 10; i++) {
         n = modem_send_at(config, "AT+CREG?", resp, sizeof(resp), at_timeout);
@@ -337,13 +337,13 @@ int modem_register_network(modem_driver_config_t *config)
         sscanf(creg, "+CREG: %d,%d", &n_val, &stat);
         if (stat == 1 || stat == 5) {
             ESP_LOGI(TAG, "CREG %d — registration success", stat);
-            // Step 3: Query operator name (log only).
+            // Step 3 (S3): Query operator name (log only).
             n = modem_send_at(config, "AT+COPS?", resp, sizeof(resp), at_timeout);
             if (n >= 0) {
                 const char *op = strstr(resp, "+COPS:");
                 if (op) ESP_LOGI(TAG, "Operator: %s", op);
             }
-            // Step 4: Set state and report success.
+            // Step 4 (S3): Set state and report success.
             config->state = MODEM_DRIVER_REGISTERED;
             printf("Registered on network\n");
             return 0;
@@ -379,7 +379,7 @@ int modem_activate_pdp(modem_driver_config_t *config)
     TickType_t at_timeout = pdMS_TO_TICKS(2000);
     TickType_t pdp_timeout = pdMS_TO_TICKS(30000);
 
-    // Step 1: Define PDP context — context ID 1, type IP, APN "internet".
+    // Step 1 (S3): Define PDP context — context ID 1, type IP, APN "internet".
     // Define only declares the parameters; the modem does not bring up
     // the bearer until we send CGACT=1,1.
     int n = modem_send_at(config, "AT+CGDCONT=1,\"IP\",\"internet\"",
@@ -389,7 +389,7 @@ int modem_activate_pdp(modem_driver_config_t *config)
         return -1;
     }
 
-    // Step 2: Activate context 1. Use long timeout (real networks can be slow).
+    // Step 2 (S3→S4): Activate context 1. Use long timeout (real networks can be slow).
     for (int attempt = 0; attempt < 2; attempt++) {
         n = modem_send_at(config, "AT+CGACT=1,1", resp, sizeof(resp), pdp_timeout);
         if (n >= 0 && response_contains(resp, "OK")) {
@@ -591,17 +591,17 @@ static void teardown_ppp_netif(esp_netif_t *netif,
 // ---------------------------------------------------------------------------
 //  modem_run_ppp_phase2
 //
-//  Step 3: PPP Phase 2 — hand UART to lwIP and bring up IP.
+//  Step 3 (FSM S5): PPP Phase 2 — hand UART to lwIP and bring up IP.
 //  After modem_enter_data_mode() the UART carries binary PPP frames only.
 //  No more AT; the driver must stop reading/writing this UART and let
-//  the PPP stack own it. Following sim_modem.c commenting structure.
+//  the PPP stack own it.
 //
 //  Returns action for caller: IDLE (success), ERROR, FULL_RECOVERY, or REDIAL.
 //  Calls modem_exit_data_mode before returning FULL_RECOVERY or REDIAL.
 // ---------------------------------------------------------------------------
 static ppp_phase2_action_t modem_run_ppp_phase2(modem_driver_config_t *config)
 {
-    // Phase 2.1 — Create PPP network interface
+    // Phase 2.1 (S5) — Create PPP network interface
     //   esp_netif_config_t cfg = ESP_NETIF_DEFAULT_PPP();
     //   esp_netif_t *netif = esp_netif_new(&cfg);
     esp_netif_inherent_config_t base_netif_cfg = ESP_NETIF_INHERENT_DEFAULT_PPP();
@@ -623,19 +623,20 @@ static ppp_phase2_action_t modem_run_ppp_phase2(modem_driver_config_t *config)
         return PPP_PHASE2_ERROR;
     }
 
-    // Phase 2.2 — Document: PPPoS (PPP over serial) created in the previous step
+    // Phase 2.2 (S5) — Document: PPPoS (PPP over serial) created in the previous step
     // should be bound to this UART, make sure nothing else is bound to it
     ESP_LOGI(TAG, "PPPoS created, bound to UART%d — nothing else uses this UART", config->uart_num);
 
-    // Phase 2.3 — Register netif and set as default
+    // Phase 2.3 (S5) — Register netif and set as default
     //   Register netif so lwIP routes through it. Set default so apps use this
     //   interface (not WiFi). Can go wrong: Netif not default — apps try WiFi.
     esp_netif_set_default_netif(netif);
     ESP_LOGI(TAG, "PPP netif registered and set as default");
 
-    // Phase 2.4 — Document: lwIP (PPP state machine) does LCP and IPCP. ESP-IDF 
-    // (PPPoS / netif glue), connects that to the UART and to the esp_netif. 
-    // This bulk of this process happens backend, check result in 2.5
+    // Phase 2.4 (S5: lwIP drives S5.3 LCP + S5.4 IPCP on the sim side) —
+    // lwIP's PPP state machine does LCP and IPCP. ESP-IDF (PPPoS / netif glue)
+    // connects that to the UART and to the esp_netif. The bulk of this process
+    // happens in the background; check result in 2.5.
     s_ppp_result = PPP_POLL_NONE;
 
     // Registers IP_EVENT (on_ppp_ip_event) and NETIF_PPP_STATUS (on_ppp_status_event)
@@ -650,7 +651,7 @@ static ppp_phase2_action_t modem_run_ppp_phase2(modem_driver_config_t *config)
     esp_netif_action_start(netif, 0, 0, 0);
     esp_netif_action_connected(netif, 0, 0, 0);
 
-    // Phase 2.5 — Wait for IP address (PPP got IP)
+    // Phase 2.5 (S5: sim responds via S5.5 IPv4 once IPCP is up) — Wait for IP address
     //   - Register for IP_EVENT_PPP_GOT_IP (or equivalent) or block until
     //     esp_netif_get_ip_info(netif, &info) shows a valid address (not 0.0.0.0).
     //   - Can go wrong: Timeout — LCP/IPCP failed or modem didn't assign IP.
@@ -688,7 +689,7 @@ static ppp_phase2_action_t modem_run_ppp_phase2(modem_driver_config_t *config)
     }
 
     if (result == PPP_POLL_GOT_IP) {
-        // Phase 2.6 — Use the link: keep PPP netif alive, continuously feed UART to lwIP.
+        // Phase 2.6 (S5: sim handles S5.5 IPv4 traffic) — Use the link: keep PPP netif alive, continuously feed UART to lwIP.
         // Other tasks can use standard socket APIs (connect, send, recv) — traffic routes
         // through the default PPP netif. Runs until link down (LOST_IP, PPP status events).
         getIP_fails = 0;
@@ -755,7 +756,7 @@ void modem_driver_task(void *param)
     ESP_LOGI(TAG, "modem_driver_task started");
 
     // -----------------------------------------------------------------------
-    // Step 1: Wait for modem to boot.
+    // Step 1 (FSM S0→S1): Wait for modem to boot.
     // The sim_modem_task boots in 1.5s. We wait 3s to be safe — on real
     // hardware, modems can take 5-15s. modem_check_sim() retries handle
     // the case where we start too early.
@@ -765,13 +766,13 @@ void modem_driver_task(void *param)
     printf("Driver: connecting to modem...\n");
 
     // -----------------------------------------------------------------------
-    // Step 2: Run the connection sequence.
+    // Step 2 (FSM S1→S4): Run the AT command connection sequence.
     // Each function returns 0 on success, -1 on failure.
     // On failure, skip remaining steps and report which step failed.
     // -----------------------------------------------------------------------
 
 full_recovery:
-    // Step 2a: Verify modem is alive and SIM is ready.
+    // Step 2a (FSM S1→S2): Verify modem is alive and SIM is ready.
     // Sends: AT, ATE0, AT+CPIN? — expects OK and +CPIN: READY.
     if (modem_check_sim(config) != 0) {
         printf("=== Connection failed: SIM check ===\n");
@@ -779,7 +780,7 @@ full_recovery:
     }
     printf("Driver: SIM OK\n");
 
-    // Step 2b: Register on the cellular network.
+    // Step 2b (FSM S2→S3): Register on the cellular network.
     // Sends: AT+CSQ, AT+CREG?, AT+COPS? — waits for registration.
     if (modem_register_network(config) != 0) {
         printf("=== Connection failed: network registration ===\n");
@@ -787,7 +788,7 @@ full_recovery:
     }
     printf("Driver: Registered on network\n");
 
-    // Step 2c: Activate PDP context (data bearer).
+    // Step 2c (FSM S3→S4): Activate PDP context (data bearer).
     // Sends: AT+CGDCONT, AT+CGACT — establishes IP path through carrier.
     if (modem_activate_pdp(config) != 0) {
         printf("=== Connection failed: PDP activation ===\n");
@@ -796,7 +797,7 @@ full_recovery:
     printf("Driver: PDP context active\n");
 
 redial:
-    // Step 2d: Switch UART from AT text to PPP binary.
+    // Step 2d (FSM S4→S5): Switch UART from AT text to PPP binary.
     // Sends: ATD*99# — expects CONNECT. After this, no more AT commands.
     if (modem_enter_data_mode(config) != 0) {
         printf("=== Connection failed: data mode ===\n");
@@ -805,7 +806,7 @@ redial:
     printf("Driver: PPP link up\n");
 
     // -----------------------------------------------------------------------
-    // Step 3: PPP Phase 2 — hand UART to lwIP and bring up IP.
+    // Step 3 (FSM S5): PPP Phase 2 — hand UART to lwIP and bring up IP.
     // -----------------------------------------------------------------------
     switch (modem_run_ppp_phase2(config)) {
         case PPP_PHASE2_IDLE:
