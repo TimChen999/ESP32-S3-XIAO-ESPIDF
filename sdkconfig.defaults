@@ -1,0 +1,25 @@
+# ESP-IDF sdkconfig.defaults for Seeed XIAO ESP32-S3
+# Cellular Modem Simulator project
+# Run: idf.py set-target esp32s3 (first time)
+
+# Partition table
+CONFIG_PARTITION_TABLE_SINGLE_APP=y
+CONFIG_PARTITION_TABLE_FILENAME="partitions_singleapp.csv"
+
+# Flash configuration (XIAO ESP32-S3: 8MB flash, DIO mode)
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+
+# Serial flasher
+CONFIG_ESPTOOLPY_MONITOR_BAUD=115200
+
+# PPP support (required for modem driver)
+CONFIG_PPP_SUPPORT=y
+
+# Console (UART0 for debug output)
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+# CPU frequency
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_160=y
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ=160

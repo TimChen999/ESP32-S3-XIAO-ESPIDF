@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "author": "Uri Shaked",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-xiao-esp32-s3", "id": "esp", "top": 38.97, "left": 13.78, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:D0", "esp:D8", "green",  [ "v-30", "h120", "v120" ] ],
+    [ "esp:D5", "esp:D1", "blue",   [ "v30", "h-120", "v-120" ] ],
+    [ "esp:D2", "esp:D9", "gold",   [ "v-45", "h150", "v165" ] ],
+    [ "esp:D4", "esp:D3", "orange", [ "v45", "h-150", "v-165" ] ]
+  ],
+  "dependencies": {}
+}
