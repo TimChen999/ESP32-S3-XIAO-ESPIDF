@@ -268,6 +268,24 @@ static sim_modem_state_t handle_at_command(sim_modem_config_t *config,
 #define PPP_TRANS_BYTE   0x20
 
 // ---------------------------------------------------------------------------
+//  PPP FCS (Frame Check Sequence)
+//  RFC 1662 standard CRC-16 for PPP frames (computed bitwise to save space)
+// ---------------------------------------------------------------------------
+static unsigned short ppp_fcs16(unsigned short fcs, const unsigned char *cp, size_t len)
+{
+    while (len--) {
+        fcs ^= *cp++;
+        for (int i = 0; i < 8; i++) {
+            if (fcs & 1)
+                fcs = (fcs >> 1) ^ 0x8408;
+            else
+                fcs >>= 1;
+        }
+    }
+    return fcs;
+}
+
+// ---------------------------------------------------------------------------
 //  send_ppp_frame
 //
 //  Wraps payload in 0x7E delimiters, applies byte stuffing (RFC 1662), and
@@ -281,20 +299,47 @@ static void send_ppp_frame(sim_modem_config_t *config,
     unsigned char tx_buf[1024];
     size_t tx_len = 0;
 
+    // Calculate FCS (PPP checksum)
+    unsigned short fcs = 0xffff;
+    fcs = ppp_fcs16(fcs, frame, len);
+    fcs ^= 0xffff;
+
     uart_write_bytes(config->uart_num, (const char *)&ppp_flag, 1);  // opening 0x7E
 
-    for (size_t i = 0; i < len && tx_len < sizeof(tx_buf) - 2; i++) {
+    // Write the payload
+    for (size_t i = 0; i < len; i++) {
+        // If buffer is almost full (need space for up to 2 stuffed bytes), flush it
+        if (tx_len >= sizeof(tx_buf) - 2) {
+            uart_write_bytes(config->uart_num, (const char *)tx_buf, tx_len);
+            tx_len = 0;
+        }
+
         unsigned char c = frame[i];
-        if (c == PPP_FLAG_BYTE) {
+        if (c == PPP_FLAG_BYTE || c == PPP_ESCAPE_BYTE || c < 0x20) {
             tx_buf[tx_len++] = PPP_ESCAPE_BYTE;
-            tx_buf[tx_len++] = c ^ PPP_TRANS_BYTE;  // 0x5E
-        } else if (c == PPP_ESCAPE_BYTE) {
-            tx_buf[tx_len++] = PPP_ESCAPE_BYTE;
-            tx_buf[tx_len++] = c ^ PPP_TRANS_BYTE;  // 0x5D
+            tx_buf[tx_len++] = c ^ PPP_TRANS_BYTE;
         } else {
             tx_buf[tx_len++] = c;
         }
     }
+    
+    // Write the FCS bytes (LSB first)
+    unsigned char fcs_bytes[2] = { fcs & 0x00FF, (fcs >> 8) & 0x00FF };
+    for (size_t i = 0; i < 2; i++) {
+        if (tx_len >= sizeof(tx_buf) - 2) {
+            uart_write_bytes(config->uart_num, (const char *)tx_buf, tx_len);
+            tx_len = 0;
+        }
+
+        unsigned char c = fcs_bytes[i];
+        if (c == PPP_FLAG_BYTE || c == PPP_ESCAPE_BYTE || c < 0x20) {
+            tx_buf[tx_len++] = PPP_ESCAPE_BYTE;
+            tx_buf[tx_len++] = c ^ PPP_TRANS_BYTE;
+        } else {
+            tx_buf[tx_len++] = c;
+        }
+    }
+
     if (tx_len > 0) {
         uart_write_bytes(config->uart_num, (const char *)tx_buf, tx_len);
     }
@@ -391,8 +436,23 @@ static void handle_lcp_frame(sim_modem_config_t *config,
 
             ESP_LOGI(TAG, "LCP Config-Request sent (id=%u, MRU=1500)",
                      (unsigned int)req_frame[5]);
+        } else if (lcp_code == 0x05 && lcp_len >= 4 && (4U + lcp_len) <= frame_len) {
+            // Handle Terminate-Request (0x05) by sending Terminate-Ack (0x06)
+            unsigned char ack_frame[512];
+            size_t ack_len = 4U + lcp_len;
+            
+            ack_frame[0] = 0xFF;
+            ack_frame[1] = 0x03;
+            ack_frame[2] = 0xC0;
+            ack_frame[3] = 0x21;
+            memcpy(&ack_frame[4], lcp, lcp_len);
+            ack_frame[4] = 0x06; // Terminate-Ack
+            
+            send_ppp_frame(config, ack_frame, ack_len, ppp_flag);
+            ESP_LOGI(TAG, "LCP Terminate-Ack sent (id=%u)", (unsigned int)lcp_id);
+            
         } else {
-            ESP_LOGW(TAG, "LCP frame received but not a valid Config-Request");
+            ESP_LOGW(TAG, "LCP frame received but unhandled code: 0x%02X", lcp_code);
         }
     } else {
         ESP_LOGW(TAG, "LCP frame too short for negotiation");
@@ -488,21 +548,18 @@ static void handle_ipcp_frame(sim_modem_config_t *config,
             ESP_LOGI(TAG, "IPCP Config-Nak sent (suggesting 10.0.0.2)");
         }
 
-        // Send our own IPCP Config-Request: propose modem's IP + DNS servers.
-        // [0:4, PPP hdr] [4:5, 0x01 Config-Req] [5:6, id] [6:8, len=22] [8:14, IP opt 10.0.0.1] [14:20, DNS1 opt] [20:26, DNS2 opt]
+        // Send our own IPCP Config-Request: propose modem's IP only.
+        // [0:4, PPP hdr] [4:5, 0x01 Config-Req] [5:6, id] [6:8, len=10] [8:14, IP opt 10.0.0.1]
         const unsigned char modem_ip[] = SIM_MODEM_IP;
-        const unsigned char dns_ip[]   = SIM_DNS_IP;
         static unsigned char local_ipcp_id = 0x60;
         unsigned char req[] = {
             0xFF, 0x03, 0x80, 0x21,
-            0x01, local_ipcp_id++, 0x00, 0x16,
-            0x03, 0x06, modem_ip[0], modem_ip[1], modem_ip[2], modem_ip[3],
-            0x81, 0x06, dns_ip[0],   dns_ip[1],   dns_ip[2],   dns_ip[3],
-            0x83, 0x06, dns_ip[0],   dns_ip[1],   dns_ip[2],   dns_ip[3]
+            0x01, local_ipcp_id++, 0x00, 0x0A,
+            0x03, 0x06, modem_ip[0], modem_ip[1], modem_ip[2], modem_ip[3]
         };
 
         send_ppp_frame(config, req, sizeof(req), ppp_flag);
-        ESP_LOGI(TAG, "IPCP Config-Request sent (modem=10.0.0.1, DNS=10.0.0.1)");
+        ESP_LOGI(TAG, "IPCP Config-Request sent (modem=10.0.0.1)");
 
     } else if (code == 0x02) {
         // IPCP Config-Ack from driver — peer accepted our IP config.

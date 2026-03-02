@@ -559,6 +559,36 @@ static void on_ppp_status_event(void *arg, esp_event_base_t base, int32_t id, vo
 }
 
 // ---------------------------------------------------------------------------
+//  teardown_ppp_netif
+//
+//  Helper function to safely tear down the PPP network interface asynchronously,
+//  wait for the tcpip_thread to acknowledge the shutdown via event, and then
+//  destroy the interface and unregister handlers.
+// ---------------------------------------------------------------------------
+static void teardown_ppp_netif(esp_netif_t *netif, 
+                               esp_event_handler_instance_t ip_inst, 
+                               esp_event_handler_instance_t status_inst) 
+{
+    esp_netif_action_disconnected(netif, 0, 0, 0);
+    esp_netif_action_stop(netif, 0, 0, 0);
+    
+    // Blocks until phase dead is complete, or destroy_netif will cause async process to fail
+    ESP_LOGI(TAG, "Waiting for PPP PHASE_DEAD event before destroying netif...");
+    while (1) {
+        if (s_ppp_result == PPP_POLL_FAIL_FULL || 
+            s_ppp_result == PPP_POLL_FAIL_FATAL || 
+            s_ppp_result == PPP_POLL_FAIL_REDIAL) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    
+    esp_event_handler_instance_unregister(IP_EVENT, ESP_EVENT_ANY_ID, ip_inst);
+    esp_event_handler_instance_unregister(NETIF_PPP_STATUS, ESP_EVENT_ANY_ID, status_inst);
+    esp_netif_destroy(netif);
+}
+
+// ---------------------------------------------------------------------------
 //  modem_run_ppp_phase2
 //
 //  Step 3: PPP Phase 2 — hand UART to lwIP and bring up IP.
@@ -632,11 +662,7 @@ static ppp_phase2_action_t modem_run_ppp_phase2(modem_driver_config_t *config)
     if (ppp_buf == NULL) {
         // Allocation failed, go error
         ESP_LOGE(TAG, "PPP RX buffer malloc failed");
-        esp_event_handler_instance_unregister(IP_EVENT, ESP_EVENT_ANY_ID, ip_inst);
-        esp_event_handler_instance_unregister(NETIF_PPP_STATUS, ESP_EVENT_ANY_ID, status_inst);
-        esp_netif_action_disconnected(netif, 0, 0, 0);
-        esp_netif_action_stop(netif, 0, 0, 0);
-        esp_netif_destroy(netif);
+        teardown_ppp_netif(netif, ip_inst, status_inst);
         return PPP_PHASE2_ERROR;
     }
 
@@ -687,11 +713,7 @@ static ppp_phase2_action_t modem_run_ppp_phase2(modem_driver_config_t *config)
 
     // Cleanup: unregister handlers, tear down netif (on failure or Phase 2.6 link-down exit)
     free(ppp_buf);
-    esp_event_handler_instance_unregister(IP_EVENT, ESP_EVENT_ANY_ID, ip_inst);
-    esp_event_handler_instance_unregister(NETIF_PPP_STATUS, ESP_EVENT_ANY_ID, status_inst);
-    esp_netif_action_disconnected(netif, 0, 0, 0);
-    esp_netif_action_stop(netif, 0, 0, 0);
-    esp_netif_destroy(netif);
+    teardown_ppp_netif(netif, ip_inst, status_inst);
 
     // If we reached here from Phase 2.6, result is FAIL_* (link down). Fall through to recovery.
     getIP_fails++;
