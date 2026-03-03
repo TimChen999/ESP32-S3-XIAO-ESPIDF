@@ -31,6 +31,10 @@
 #include "esp_sntp.h"
 #include "esp_http_client.h"
 
+// Set to 1 to enable actual NTP time synchronization (required for HTTPS/SSL)
+// Set to 0 to mock the time sync (useful for Wokwi which blocks UDP traffic)
+#define ENABLE_TIME_SYNC 0
+
 static const char *TAG = "NET_APP";
 
 /* FreeRTOS event group to signal when we have an IP and when time is synced */
@@ -51,12 +55,21 @@ static void on_ip_event(void *arg, esp_event_base_t event_base,
         if (event_id == IP_EVENT_PPP_GOT_IP) {
             ESP_LOGI(TAG, "Network connected via PPP modem! IP acquired.");
             xEventGroupSetBits(s_network_event_group, IP_READY_BIT);
+#if !ENABLE_TIME_SYNC
+            xEventGroupSetBits(s_network_event_group, TIME_SYNC_BIT);
+#endif
         } else if (event_id == IP_EVENT_STA_GOT_IP) {
             ESP_LOGI(TAG, "Network connected via Wi-Fi! IP acquired.");
             xEventGroupSetBits(s_network_event_group, IP_READY_BIT);
+#if !ENABLE_TIME_SYNC
+            xEventGroupSetBits(s_network_event_group, TIME_SYNC_BIT);
+#endif
         } else if (event_id == IP_EVENT_PPP_LOST_IP || event_id == IP_EVENT_STA_LOST_IP) {
             ESP_LOGW(TAG, "Network disconnected.");
             xEventGroupClearBits(s_network_event_group, IP_READY_BIT);
+#if !ENABLE_TIME_SYNC
+            xEventGroupClearBits(s_network_event_group, TIME_SYNC_BIT);
+#endif
         }
     }
 }
@@ -89,6 +102,7 @@ void network_app_init(void)
      * Even though we don't have an IP address yet, we can initialize SNTP here.
      * The underlying stack will wait until the default network interface is UP
      * before it tries to send its UDP packets to fetch the time. */
+#if ENABLE_TIME_SYNC
     ESP_LOGI(TAG, "Initializing SNTP...");
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "pool.ntp.org");
@@ -99,6 +113,9 @@ void network_app_init(void)
     // Set timezone to UTC. (Example for EST: setenv("TZ", "EST5EDT,M3.2.0/2,M11.1.0", 1); tzset();)
     setenv("TZ", "UTC", 1);
     tzset();
+#else
+    ESP_LOGI(TAG, "SNTP time sync is disabled. Mocking time sync.");
+#endif
 }
 
 void network_app_wait_for_connection(void)

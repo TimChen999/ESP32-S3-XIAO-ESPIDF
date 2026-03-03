@@ -14,8 +14,8 @@
 //  WIFI CONFIGURATION
 // ============================================================================
 
-#define WIFI_SSID      "YOUR_WIFI_SSID"
-#define WIFI_PASS      "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID      "Wokwi-GUEST" // Default simulated Wokwi wifi
+#define WIFI_PASS      ""
 #define MAXIMUM_RETRY  5
 
 static const char *TAG = "WIFI_DRIVER";
@@ -121,7 +121,8 @@ void wifi_driver_init(void)
             /* Setting a password implies station will connect to all security modes including WEP/WPA.
              * However, these modes are deprecated and not advisable to be used. Incase your Access point
              * doesn't support WPA2, these mode can be enabled by commenting below line */
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            /*.threshold.authmode = WIFI_AUTH_WPA2_PSK,*/
+            .threshold.authmode = WIFI_AUTH_OPEN,
         },
     };
 

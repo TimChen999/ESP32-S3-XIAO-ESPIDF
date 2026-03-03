@@ -53,6 +53,9 @@ Launched as a separate FreeRTOS task, this handles the actual business logic of 
     *   `network_app_wait_for_connection()`: Blocks execution until the event loop sets the `IP_READY_BIT` (which happened during Wi-Fi Event Handler Execution).
 *   **Step 2: Wait for SNTP to sync the time**
     *   `network_app_wait_for_time_sync()`: Blocks until the background SNTP client successfully receives an NTP UDP response and fires its callback setting the `TIME_SYNC_BIT`.
+    *   **Why Time Sync is Critical:** When an ESP32 boots, its internal clock defaults to January 1, 1970. 
+        *   **When it's NOT needed:** Plain, unencrypted `HTTP` connections (port 80) or raw TCP sockets do not care what time it is. They will work perfectly without a synced clock.
+        *   **When it IS needed:** Secure `HTTPS` connections (port 443), AWS IoT, or MQTT over TLS require cryptographic verification of the server's SSL certificate. Every certificate has a "Not Before" and "Not After" date. If the ESP32 thinks it is 1970, the TLS library (`mbedTLS`) will reject the certificate as invalid and instantly drop the connection. Therefore, SNTP time synchronization is a mandatory prerequisite for modern, secure internet communication.
 *   **Step 3: Test direct internet connectivity (HTTP GET)**
     *   **Step 3a:** Ensure we have an IP (safety check).
     *   **Step 3b:** Configure the HTTP Client (`esp_http_client_init`). We tell it to fetch `http://httpbin.org/get`.
@@ -82,3 +85,17 @@ sequenceDiagram
 
 **Key Takeaway:** 
 The application (`network_app`) just opens a standard POSIX socket and writes data. The `esp_netif` routing table automatically looks at the default interface (configured during `wifi_driver_init`) and funnels the bytes out through the Wi-Fi driver, converting the high-level request into physical radio waves transparently.
+
+## 6. Wi-Fi vs. Cellular: Abstraction Differences
+
+While the Network Application (`network_app.c`) treats both Wi-Fi and Cellular identically at Layer 7, the way they are abstracted by the ESP-IDF at the lower layers is fundamentally different.
+
+### Wi-Fi (Hardware-Native)
+*   **Built-in Silicon:** The ESP32 chip has a physical Wi-Fi radio built directly into the silicon. 
+*   **Automated Background Tasks:** Because ESP-IDF is developed by Espressif, it has deep, native access to this hardware. When you call `esp_wifi_start()`, the ESP-IDF automatically spawns hidden background FreeRTOS tasks (like `wifi` and `tiT` for TCP/IP).
+*   **No Manual Task Needed:** These proprietary background tasks handle all of the interrupts, state machine transitions, and physical radio polling automatically. `wifi_driver.c` merely configures the hardware and registers event callbacks. You do not need to spawn a manual `wifi_driver_task` in `main.c`.
+
+### Cellular Modem (External Peripheral)
+*   **External Hardware:** The cellular modem is an entirely separate chip connected via serial UART pins. The ESP32 has no native understanding of it.
+*   **Manual Task Execution:** Because it is external, you must write the driver from scratch (`modem_driver.c`). You must actively manage the UART connection—sending AT commands, waiting for text responses, parsing timeouts, and driving the Point-to-Point Protocol (PPP) state machine.
+*   **Requires Dedicated Thread:** To execute this complex, blocking state machine without halting the rest of the system, you *must* manually spawn `modem_driver_task` in `main.c`. This gives the custom driver its own dedicated FreeRTOS thread to run on, effectively simulating the background processing that the ESP-IDF does automatically for Wi-Fi.

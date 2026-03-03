@@ -9,6 +9,7 @@
 #include "modem_driver.h"
 #include "network_app.h"
 #include "wifi_driver.h"
+#include "test_network.h"
 
 // ============================================================================
 //  PIN & UART CONFIGURATION
@@ -164,6 +165,17 @@ void app_main(void)
         TASK_STACK_SIZE * 2,     // Need larger stack for HTTP
         NULL,
         DRIVER_PRIORITY - 1,     // Slightly lower priority than network driver
+        NULL,
+        DRIVER_CORE
+    );
+
+    // --- Launch the testing task ---
+    xTaskCreatePinnedToCore(
+        test_network_task,
+        "test_task",
+        TASK_STACK_SIZE * 2,
+        NULL,
+        DRIVER_PRIORITY - 1,
         NULL,
         DRIVER_CORE
     );
