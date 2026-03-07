@@ -72,6 +72,44 @@ Build the project first (via ESP-IDF extension or `idf.py build`). Wokwi uses th
 
 The simulator uses `diagram.json` (circuit) and `wokwi.toml` (firmware paths). The diagram cross-wires UART1 and UART2 on the XIAO ESP32-S3 as required by the modem simulator.
 
+### 5. Audio bridge — use your PC mic and speakers (optional)
+
+When the firmware is built with `MIC_SIMULATE=1` and `SPEAKER_SIMULATE=1`, the mic and speaker drivers route audio through a Python HTTP bridge running on your PC instead of using I2S hardware. This lets you have a real voice conversation through the Wokwi simulator.
+
+**Install the bridge dependencies (one time):**
+
+```bash
+pip install -r tools/audio_bridge/requirements.txt
+```
+
+**Start the bridge before launching Wokwi:**
+
+```bash
+python tools/audio_bridge/audio_bridge.py
+```
+
+The bridge opens two endpoints on `localhost:8080`:
+- `GET /mic` — records a chunk from your PC microphone, returns raw PCM
+- `POST /speaker` — receives raw PCM, plays it on your PC speakers
+
+The ESP32 firmware calls these endpoints from the simulate branches of the capture and playback loops. The bridge URL defaults to `http://10.13.37.1:8080` (Wokwi's gateway to the host). Override with `-DAUDIO_BRIDGE_MIC_URL=...` or `-DAUDIO_BRIDGE_SPEAKER_URL=...` at build time if your setup uses a different address.
+
+**Optional bridge flags:**
+
+```bash
+python tools/audio_bridge/audio_bridge.py --list-devices     # show audio devices
+python tools/audio_bridge/audio_bridge.py --input-device 2   # pick a specific mic
+python tools/audio_bridge/audio_bridge.py --port 9090        # custom port
+```
+
+**Test the bridge independently (no Wokwi needed):**
+
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/mic -o chunk.raw
+curl -X POST http://localhost:8080/speaker --data-binary @chunk.raw
+```
+
 ---
 
 ## Build via command line (optional)

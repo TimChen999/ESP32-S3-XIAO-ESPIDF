@@ -12,6 +12,20 @@
 #define MIC_SIMULATE 0
 #endif
 
+#if MIC_SIMULATE
+// ── Audio bridge configuration ──────────────────────────────────────
+// URL of the Python audio bridge running on the host PC.
+// The bridge captures real audio from the PC mic and returns raw PCM.
+// See tools/audio_bridge/audio_bridge.py for the bridge server.
+//
+// Default uses Wokwi's gateway IP (10.13.37.1). Adjust if your setup
+// differs — try your machine's LAN IP or the Wokwi gateway address.
+// Can be overridden at build time via compiler flags (-D).
+#ifndef AUDIO_BRIDGE_MIC_URL
+#define AUDIO_BRIDGE_MIC_URL    "http://10.13.37.1:8080/mic"
+#endif
+#endif
+
 #if !MIC_SIMULATE
 #include "driver/i2s_std.h"
 #endif
@@ -247,7 +261,7 @@ void mic_init(void)
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_rx_handle, &std_cfg));
 
 #else
-    ESP_LOGI(TAG, "MIC_SIMULATE=1 — I2S hardware disabled (generating fake data instead)");
+    ESP_LOGI(TAG, "MIC_SIMULATE=1 — using audio bridge at " AUDIO_BRIDGE_MIC_URL);
 #endif
 
     // Step 3: Allocate stream buffer (ring buffer between capture and upload tasks)
@@ -556,12 +570,37 @@ void mic_capture_task(void *param)
                 break;
             }
 #else
-            memset(capture_buf, 0, sizeof(capture_buf));
-            size_t bytes_read = sizeof(capture_buf);
-            uint32_t sim_delay_ms = (CAPTURE_BUF_SIZE * 1000) /
-                                    (MIC_SAMPLE_RATE * (MIC_BITS / 8) * MIC_CHANNELS);
-            vTaskDelay(pdMS_TO_TICKS(sim_delay_ms));
-            ESP_LOGD(TAG, "Simulated I2S read: %d bytes", (int)bytes_read);
+            // ── Audio bridge entry point: GET /mic ──────────────────────
+            // Fetches real PCM from the host PC's microphone via the
+            // Python audio bridge (tools/audio_bridge/audio_bridge.py).
+            // The bridge blocks until a full chunk is recorded, providing
+            // natural real-time pacing with no artificial delay needed.
+            size_t bytes_read = 0;
+            {
+                esp_http_client_config_t bridge_cfg = {
+                    .url        = AUDIO_BRIDGE_MIC_URL,
+                    .method     = HTTP_METHOD_GET,
+                    .timeout_ms = 5000,
+                };
+                esp_http_client_handle_t bridge = esp_http_client_init(&bridge_cfg);
+                if (bridge != NULL) {
+                    esp_err_t berr = esp_http_client_open(bridge, 0);
+                    if (berr == ESP_OK) {
+                        esp_http_client_fetch_headers(bridge);
+                        int len = esp_http_client_read(bridge,
+                                    (char *)capture_buf, sizeof(capture_buf));
+                        bytes_read = (len > 0) ? (size_t)len : 0;
+                    } else {
+                        ESP_LOGE(TAG, "Audio bridge GET /mic failed: %s",
+                                 esp_err_to_name(berr));
+                    }
+                    esp_http_client_close(bridge);
+                    esp_http_client_cleanup(bridge);
+                }
+                if (bytes_read == 0) {
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                }
+            }
 #endif
 
             if (bytes_read > 0) {

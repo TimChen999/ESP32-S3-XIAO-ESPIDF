@@ -12,6 +12,20 @@
 #define SPEAKER_SIMULATE 0
 #endif
 
+#if SPEAKER_SIMULATE
+// ── Audio bridge configuration ──────────────────────────────────────
+// URL of the Python audio bridge running on the host PC.
+// The bridge plays received PCM audio through the PC's speakers.
+// See tools/audio_bridge/audio_bridge.py for the bridge server.
+//
+// Default uses Wokwi's gateway IP (10.13.37.1). Adjust if your setup
+// differs — try your machine's LAN IP or the Wokwi gateway address.
+// Can be overridden at build time via compiler flags (-D).
+#ifndef AUDIO_BRIDGE_SPEAKER_URL
+#define AUDIO_BRIDGE_SPEAKER_URL  "http://10.13.37.1:8080/speaker"
+#endif
+#endif
+
 #if !SPEAKER_SIMULATE
 #include "driver/i2s_std.h"
 #endif
@@ -231,7 +245,7 @@ void speaker_init(void)
     // I2S channel created and configured but NOT enabled.
     // The playback task enables it when audio data is ready.
 #else
-    ESP_LOGI(TAG, "SPEAKER_SIMULATE=1 — I2S hardware disabled (logging writes instead)");
+    ESP_LOGI(TAG, "SPEAKER_SIMULATE=1 — using audio bridge at " AUDIO_BRIDGE_SPEAKER_URL);
 #endif
 
     // Step 3: Allocate stream buffer (ring buffer between network and playback tasks)
@@ -663,8 +677,36 @@ void speaker_playback_task(void *param)
                     break;
                 }
 #else
-                ESP_LOGD(TAG, "I2S write: %d bytes (simulated)", (int)received);
-                vTaskDelay(pdMS_TO_TICKS(10));
+                // ── Audio bridge entry point: POST /speaker ─────────────
+                // Sends PCM to the host PC's speaker via the Python audio
+                // bridge (tools/audio_bridge/audio_bridge.py). The bridge
+                // write blocks until playback completes, providing natural
+                // back-pressure pacing with no artificial delay needed.
+                {
+                    esp_http_client_config_t bridge_cfg = {
+                        .url        = AUDIO_BRIDGE_SPEAKER_URL,
+                        .method     = HTTP_METHOD_POST,
+                        .timeout_ms = 5000,
+                    };
+                    esp_http_client_handle_t bridge = esp_http_client_init(&bridge_cfg);
+                    if (bridge != NULL) {
+                        esp_http_client_set_header(bridge, "Content-Type",
+                                                  "application/octet-stream");
+                        esp_err_t berr = esp_http_client_open(bridge,
+                                                              (int)received);
+                        if (berr == ESP_OK) {
+                            esp_http_client_write(bridge, (char *)play_buf,
+                                                 (int)received);
+                            esp_http_client_fetch_headers(bridge);
+                        } else {
+                            ESP_LOGE(TAG, "Audio bridge POST /speaker failed: %s",
+                                     esp_err_to_name(berr));
+                            vTaskDelay(pdMS_TO_TICKS(10));
+                        }
+                        esp_http_client_close(bridge);
+                        esp_http_client_cleanup(bridge);
+                    }
+                }
 #endif
             } else {
                 // Stream buffer empty — two possible situations:
@@ -684,6 +726,8 @@ void speaker_playback_task(void *param)
                     s_tx_handle, play_buf, sizeof(play_buf),
                     &bytes_written, 100
                 );
+#else
+                vTaskDelay(pdMS_TO_TICKS(20));
 #endif
                 ESP_LOGW(TAG, "Buffer underrun — writing silence");
             }
