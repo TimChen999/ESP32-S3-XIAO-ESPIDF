@@ -1,4 +1,5 @@
 #include "sim_modem.h"
+#include "board_config.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -8,24 +9,9 @@
 
 static const char *TAG = "SIM_MODEM";
 
-// ============================================================================
-//  PIN & UART CONFIGURATION — Simulated Modem Side
-//
-//  Physical wiring (see diagram.json):
-//    Modem TX  (D5) ───blue wire───► Driver RX (D1)
-//    Driver TX (D0) ───green wire──► Modem RX  (D8)
-//
-//  Flow control wiring (optional — set FLOW_CONTROL_ENABLED to 1):
-//    Modem RTS (D4) ───orange wire─► Driver CTS (D3)
-//    Driver RTS(D2) ───yellow wire─► Modem CTS  (D9)
-//
-//  UART0 (D6=TX, D7=RX) is reserved for the console.
-// ============================================================================
-#define MODEM_SIM_UART_NUM  2
-#define MODEM_SIM_TX_PIN    6            // D5 on XIAO (GPIO6)
-#define MODEM_SIM_RX_PIN    7            // D8 on XIAO (GPIO7)
-#define MODEM_SIM_RTS_PIN   5            // D4 on XIAO (GPIO5, flow control)
-#define MODEM_SIM_CTS_PIN   8            // D9 on XIAO (GPIO8, flow control)
+// MODEM_SIM_UART_NUM, MODEM_SIM_TX_PIN, MODEM_SIM_RX_PIN,
+// MODEM_SIM_RTS_PIN, MODEM_SIM_CTS_PIN are set in board_config.h
+// — see that file for pin assignments and wiring.
 #define UART_BAUD           115200
 #define FLOW_CONTROL_ENABLED  0
 

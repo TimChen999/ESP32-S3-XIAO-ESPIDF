@@ -1,4 +1,5 @@
 #include "mic_driver.h"
+#include "board_config.h"
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -49,61 +50,8 @@ static const char *TAG = "MIC_DRV";
 #define MIC_CHANNELS            1
 #endif
 
-// ============================================================================
-//  I2S PERIPHERAL SELECTION — Separate vs. Full-Duplex
-//
-//  The ESP32-S3 has two I2S peripherals (I2S0 and I2S1). The mic can use
-//  either one:
-//
-//  MIC_I2S_NUM = 1 (default) — SEPARATE I2S1
-//    - Mic gets its own I2S peripheral, completely independent of speaker
-//    - Uses 3 GPIO pins: BCLK, WS, DIN (own clock lines)
-//    - Zero coordination with speaker driver — simplest setup
-//    - No changes to speaker_driver.c needed
-//
-//  MIC_I2S_NUM = 0 — FULL-DUPLEX on I2S0 (shared with speaker)
-//    - Mic shares BCLK + WS clock lines with the speaker
-//    - Uses only 1 new GPIO pin: DIN (mic data in)
-//    - Saves 2 GPIO pins but requires speaker_driver.c coordination:
-//        1. Set SPEAKER_FULL_DUPLEX=1 in speaker_driver.c
-//        2. speaker_init() must be called BEFORE mic_init()
-//        3. speaker_init() creates both TX+RX handles
-//        4. mic_init() retrieves RX handle via speaker_get_rx_handle()
-//    - After init, both drivers operate completely independently
-//
-//  Pin usage comparison:
-//    Separate (I2S1):      3 pins — BCLK(GPIO1), WS(GPIO2), DIN(GPIO3)
-//    Full-duplex (I2S0):   1 pin  — DIN(GPIO1) (BCLK+WS shared with speaker)
-// ============================================================================
-#define MIC_I2S_NUM             1
-
-// ============================================================================
-//  I2S PIN CONFIGURATION
-//
-//  Pin assignments depend on MIC_I2S_NUM (separate vs. full-duplex):
-//
-//  Separate I2S1 (MIC_I2S_NUM = 1):
-//    BCLK → GPIO1 (D0 on XIAO) — mic's own bit clock
-//    WS   → GPIO2 (D1 on XIAO) — mic's own word select
-//    DIN  → GPIO3 (D2 on XIAO) — mic data input (INMP441 SD pin)
-//
-//  Full-duplex I2S0 (MIC_I2S_NUM = 0):
-//    BCLK → GPIO9  (D10 on XIAO) — shared with speaker, must match
-//    WS   → GPIO10 (D7 on XIAO)  — shared with speaker, must match
-//    DIN  → GPIO1  (D0 on XIAO)  — only new pin needed
-//
-//  These pins are free when using WiFi mode (modem UART pins D0-D5 unused).
-//  For the INMP441 mic, wire: BCLK→SCK, WS→WS, DIN→SD, VDD→3.3V, GND→GND.
-// ============================================================================
-#if MIC_I2S_NUM == 0
-#define MIC_I2S_BCLK_PIN       9
-#define MIC_I2S_WS_PIN         10
-#define MIC_I2S_DIN_PIN        1
-#else
-#define MIC_I2S_BCLK_PIN       1
-#define MIC_I2S_WS_PIN         2
-#define MIC_I2S_DIN_PIN        3
-#endif
+// MIC_I2S_NUM, MIC_I2S_BCLK_PIN, MIC_I2S_WS_PIN, MIC_I2S_DIN_PIN
+// are set in board_config.h — see that file for wiring and full-duplex details.
 
 // ============================================================================
 //  RING BUFFER CONFIGURATION

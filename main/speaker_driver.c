@@ -1,4 +1,5 @@
 #include "speaker_driver.h"
+#include "board_config.h"
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -47,24 +48,8 @@ static const char *TAG = "SPEAKER_DRV";
 #define SPEAKER_CHANNELS        2
 #endif
 
-// ============================================================================
-//  I2S PIN CONFIGURATION
-//
-//  Assign GPIO pins for the I2S bus connecting to the amplifier (e.g.
-//  MAX98357A, NS4168). No I2C pins are needed for I2S-only amps.
-//
-//  Default assignment avoids conflict with modem UART pins (D0–D5, D8–D9):
-//    BCLK → GPIO9  (D10/SDA on XIAO)
-//    WS   → GPIO10 (D7/SCL on XIAO)
-//    DOUT → GPIO44 (D6 on XIAO)
-//
-//  In WiFi-only mode (modem pins free), any GPIO can be used.
-//  If using a codec chip with I2C, reassign I2S to D0–D2 and keep
-//  D10/D7 for the I2C bus (SDA/SCL).
-// ============================================================================
-#define I2S_BCLK_PIN            9
-#define I2S_WS_PIN              10
-#define I2S_DOUT_PIN            44
+// SPEAKER_I2S_BCLK_PIN, SPEAKER_I2S_WS_PIN, SPEAKER_I2S_DOUT_PIN
+// are set in board_config.h — see that file for pin assignments.
 
 // ============================================================================
 //  RING BUFFER CONFIGURATION
@@ -109,9 +94,9 @@ static const char *TAG = "SPEAKER_DRV";
 //  STATIC STATE
 // ============================================================================
 static speaker_config_t s_speaker_cfg = {
-    .bclk_pin          = I2S_BCLK_PIN,
-    .ws_pin            = I2S_WS_PIN,
-    .dout_pin          = I2S_DOUT_PIN,
+    .bclk_pin          = SPEAKER_I2S_BCLK_PIN,
+    .ws_pin            = SPEAKER_I2S_WS_PIN,
+    .dout_pin          = SPEAKER_I2S_DOUT_PIN,
     .sample_rate       = SPEAKER_SAMPLE_RATE,
     .bits_per_sample   = SPEAKER_BITS,
     .channels          = SPEAKER_CHANNELS,

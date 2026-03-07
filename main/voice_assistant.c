@@ -57,6 +57,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 
+#include "board_config.h"
 #include "network_app.h"
 #include "speaker_driver.h"
 #include "mic_driver.h"
@@ -87,12 +88,9 @@
 //    for PTT_AUTO_RECORD_MS milliseconds, then uploads and plays.
 //    Useful for Wokwi simulation or bench testing.
 //
-//  PTT_BUTTON_PIN:
-//    GPIO number for the push-to-talk button. Default: GPIO4 (D3 on XIAO).
-//    Any GPIO with internal pull-up capability works. Wire: pin ←→ button ←→ GND.
+//  PTT_BUTTON_PIN is set in board_config.h.
 // ============================================================================
 #define PTT_BUTTON_ENABLED      1
-#define PTT_BUTTON_PIN          4
 #define PTT_AUTO_RECORD_MS      3000
 
 #if PTT_BUTTON_ENABLED && MIC_ENABLED
@@ -182,9 +180,9 @@ void voice_assistant_init(void)
 //                 ├─ mic_stop() ───► I2S RX off
 //                 ├─ mic_upload() ─► HTTP POST ─────────────────────► recv
 //                 │                  ...                                │ STT
-//                 │   IDLE ◄──────── done                              │ LLM
-//                 │                                                    │ TTS
-//                 ├─ speaker_play_url() ──────► HTTP POST ────────────►│
+//                 │   IDLE ◄──────── done                               │ LLM
+//                 │                                                     │ TTS
+//                 ├─ speaker_play_url() ──────► HTTP POST ────────────► │
 //                 │                             recv()                  │
 //                 │                             ◄──── [PCM chunks]
 //                 │                             buffer → I2S → speaker

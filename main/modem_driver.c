@@ -1,4 +1,5 @@
 #include "modem_driver.h"
+#include "board_config.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -14,24 +15,8 @@
 
 static const char *TAG = "MODEM_DRV";
 
-// ============================================================================
-//  PIN & UART CONFIGURATION — Driver Side
-//
-//  Physical wiring (see diagram.json):
-//    Driver TX  (D0) ───green wire──► Modem RX  (D8)
-//    Modem TX   (D5) ───blue wire───► Driver RX (D1)
-//
-//  Flow control wiring (optional — set FLOW_CONTROL_ENABLED to 1):
-//    Driver RTS (D2) ───yellow wire─► Modem CTS  (D9)
-//    Modem RTS  (D4) ───orange wire─► Driver CTS (D3)
-//
-//  UART0 (D6=TX, D7=RX) is reserved for the console.
-// ============================================================================
-#define DRIVER_UART_NUM     1
-#define DRIVER_TX_PIN       1            // D0 on XIAO (GPIO1)
-#define DRIVER_RX_PIN       2            // D1 on XIAO (GPIO2)
-#define DRIVER_RTS_PIN      3            // D2 on XIAO (GPIO3, flow control)
-#define DRIVER_CTS_PIN      4            // D3 on XIAO (GPIO4, flow control)
+// DRIVER_UART_NUM, DRIVER_TX_PIN, DRIVER_RX_PIN, DRIVER_RTS_PIN, DRIVER_CTS_PIN
+// are set in board_config.h — see that file for pin assignments and wiring.
 #define UART_BAUD           115200
 #define FLOW_CONTROL_ENABLED  0
 
