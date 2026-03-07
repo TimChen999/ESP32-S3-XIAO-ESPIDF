@@ -121,14 +121,47 @@ static speaker_config_t s_speaker_cfg = {
     .state             = SPEAKER_STATE_IDLE,
 };
 
+// ============================================================================
+//  FULL-DUPLEX SUPPORT (for mic driver sharing I2S0)
+//
+//  When SPEAKER_FULL_DUPLEX is 1, speaker_init() creates both TX and RX
+//  handles on I2S0. The mic driver retrieves the RX handle by calling
+//  speaker_get_rx_handle(). After that one coordination point, both
+//  drivers operate completely independently.
+//
+//  Enable this ONLY when mic_driver.c uses MIC_I2S_NUM=0 (full-duplex).
+//  When MIC_I2S_NUM=1 (separate I2S1), leave this at 0 — the mic creates
+//  its own I2S channel and no speaker changes are needed.
+// ============================================================================
+#ifndef SPEAKER_FULL_DUPLEX
+#define SPEAKER_FULL_DUPLEX 0
+#endif
+
 // This allows for the sim to run on wokwi (all the calls are piped to wokwi instead of hardware)
 #if !SPEAKER_SIMULATE
 static i2s_chan_handle_t s_tx_handle = NULL;
+#if SPEAKER_FULL_DUPLEX
+static i2s_chan_handle_t s_rx_handle_fd = NULL;
+#endif
 #endif
 static StreamBufferHandle_t s_audio_stream = NULL;
 static TaskHandle_t s_network_task_handle = NULL;
 static bool s_i2s_enabled = false;
 static char s_play_url[MAX_URL_LEN];
+
+// ============================================================================
+//  FULL-DUPLEX RX HANDLE ACCESSOR
+//
+//  Returns the I2S RX channel handle for the mic driver when operating
+//  in full-duplex mode (mic and speaker share I2S0). Only compiled when
+//  SPEAKER_FULL_DUPLEX=1. The mic driver calls this from mic_init().
+// ============================================================================
+#if SPEAKER_FULL_DUPLEX && !SPEAKER_SIMULATE
+i2s_chan_handle_t speaker_get_rx_handle(void)
+{
+    return s_rx_handle_fd;
+}
+#endif
 
 // ============================================================================
 //  VOLUME SCALING
@@ -174,9 +207,16 @@ void speaker_init(void)
     speaker_config_t *cfg = &s_speaker_cfg;
 
 #if !SPEAKER_SIMULATE
-    // Step 1: Create I2S TX channel (output only — no microphone RX)
+    // Step 1: Create I2S TX channel
+    //   SPEAKER_FULL_DUPLEX=0: TX only (no mic RX on this peripheral)
+    //   SPEAKER_FULL_DUPLEX=1: TX+RX (mic shares I2S0 in full-duplex)
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+#if SPEAKER_FULL_DUPLEX
+    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &s_tx_handle, &s_rx_handle_fd));
+    ESP_LOGI(TAG, "Full-duplex: created TX+RX handles on I2S0");
+#else
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &s_tx_handle, NULL));
+#endif
 
     // Step 2: Configure I2S standard (Philips) mode
     //   Clock:  sample rate determines BCLK and WS timing

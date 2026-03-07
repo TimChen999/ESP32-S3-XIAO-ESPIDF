@@ -3,40 +3,50 @@
  * VOICE ASSISTANT — Application Layer
  * ============================================================================
  *
- * This module connects the speaker driver to the backend. It calls
- * speaker_play_url() which opens an HTTP connection to the backend,
- * waits (blocking) for the backend to process and stream PCM audio,
- * then plays it through the speaker. The voice assistant doesn't need
- * to "know" when audio is ready — the HTTP connection stays open while
- * the backend works, and data flows automatically when ready.
+ * This module is the conversation coordinator. It manages the push-to-talk
+ * button, sequences the mic and speaker drivers, and connects both to the
+ * backend server for a complete voice conversation loop.
+ *
+ * Push-to-talk flow:
+ *   1. User presses button     → mic_start()   → I2S RX captures audio
+ *   2. User releases button    → mic_stop()    → recording ends
+ *   3. Upload recorded audio   → mic_upload()  → HTTP POST to backend
+ *   4. Backend processes        STT → LLM → TTS → PCM response
+ *   5. Play response           → speaker_play_url() → I2S TX plays audio
+ *   6. Wait for completion     → loop back to step 1
  *
  * SYSTEM TASK MAP:
  *
- *   ┌──────────────────────┐
- *   │ voice_assistant_task │ priority 5 — calls speaker_play_url(),
- *   │ (this file)          │              polls state, loops
- *   └──────────┬───────────┘
- *              │ speaker_play_url(url) — non-blocking, returns immediately
- *              ▼ internally spawns:
- *   ┌──────────────────────┐
- *   │ speaker_network_task │ priority 5 — HTTP POST to backend,
- *   │ (speaker_driver.c)   │              blocked on recv() until backend
- *   │ (ephemeral)          │              streams PCM, fills buffer
- *   └──────────┬───────────┘
- *              │ xStreamBufferSend
- *              ▼
- *   ┌──────────────────────┐
- *   │ speaker_playback_    │ priority 6 — reads buffer, volume scales,
- *   │ task                 │              writes I2S. Highest priority:
- *   │ (speaker_driver.c)   │              never starves.
- *   │ (permanent)          │
- *   └──────────────────────┘
+ *   ┌──────────────────────────┐
+ *   │ voice_assistant_task     │ pri 5 — button poll, sequences mic + speaker
+ *   │ (this file)              │
+ *   └──────┬──────────┬────────┘
+ *          │          │ public API calls
+ *          ▼          ▼
+ *   ┌──────────┐ ┌──────────────┐
+ *   │ mic_drv  │ │ speaker_drv  │
+ *   │          │ │              │
+ *   │ mic_     │ │ spk_network_ │ pri 5 — ephemeral tasks (upload / fetch)
+ *   │ upload   │ │ task         │
+ *   │ (ephem.) │ │ (ephemeral)  │
+ *   │          │ │              │
+ *   │ mic_     │ │ spk_playback │ pri 6 — permanent tasks (I2S hardware)
+ *   │ capture  │ │ _task        │
+ *   │ (perm.)  │ │ (permanent)  │
+ *   └──────────┘ └──────────────┘
  *
- * INTERFACE WITH SPEAKER DRIVER:
- *   This module only uses functions declared in speaker_driver.h:
- *     - speaker_play_url()   → start playback from a URL
- *     - speaker_get_state()  → poll whether playback is done
- *   No internal driver state, buffers, or I2S handles are touched.
+ * BUTTON HANDLING:
+ *   The push-to-talk button is handled here, NOT in the mic driver.
+ *   This keeps the mic driver hardware-agnostic — it just exposes
+ *   mic_start() and mic_stop(). The trigger mechanism (button, VAD,
+ *   fixed-duration, etc.) can be changed in this file without touching
+ *   the mic driver at all.
+ *
+ *   To swap from push-to-talk to voice activity detection (VAD):
+ *     1. Replace button_pressed() with a VAD function that analyzes
+ *        mic samples for speech presence
+ *     2. Change the polling loop to start/stop based on VAD output
+ *     3. No changes to mic_driver.c needed
  *
  * ============================================================================
  */
@@ -49,41 +59,137 @@
 
 #include "network_app.h"
 #include "speaker_driver.h"
+#include "mic_driver.h"
+
+// ============================================================================
+//  MIC INTEGRATION TOGGLE
+//
+//  When MIC_ENABLED is 1, the voice assistant uses push-to-talk:
+//    button press → record → upload → play response → repeat
+//
+//  When MIC_ENABLED is 0, the voice assistant uses the original behavior:
+//    play_url → wait → repeat (no mic, no button — speaker only)
+//
+//  Set to 0 to test the speaker driver in isolation.
+// ============================================================================
+#define MIC_ENABLED             1
+
+// ============================================================================
+//  PUSH-TO-TALK BUTTON CONFIGURATION
+//
+//  PTT_BUTTON_ENABLED = 1:
+//    Uses a physical GPIO button for push-to-talk. Hold to record,
+//    release to stop. Wire a momentary switch between the pin and GND.
+//    Internal pull-up keeps the pin HIGH when not pressed.
+//
+//  PTT_BUTTON_ENABLED = 0:
+//    Auto-record mode for testing without a physical button. Records
+//    for PTT_AUTO_RECORD_MS milliseconds, then uploads and plays.
+//    Useful for Wokwi simulation or bench testing.
+//
+//  PTT_BUTTON_PIN:
+//    GPIO number for the push-to-talk button. Default: GPIO4 (D3 on XIAO).
+//    Any GPIO with internal pull-up capability works. Wire: pin ←→ button ←→ GND.
+// ============================================================================
+#define PTT_BUTTON_ENABLED      1
+#define PTT_BUTTON_PIN          4
+#define PTT_AUTO_RECORD_MS      3000
+
+#if PTT_BUTTON_ENABLED && MIC_ENABLED
+#include "driver/gpio.h"
+#endif
 
 static const char *TAG = "VOICE_ASST";
 
 // ============================================================================
 //  BACKEND CONFIGURATION
 //
-//  URL of the backend endpoint that returns raw PCM audio.
-//  The backend receives the HTTP POST and responds with:
-//    Content-Type: application/octet-stream
-//    Transfer-Encoding: chunked
-//    Body: raw PCM bytes (s16le, matching speaker driver's AUDIO_PRESET)
+//  BACKEND_MIC_URL: endpoint that receives recorded PCM audio via HTTP POST.
+//    The backend runs: STT (speech-to-text) → LLM → TTS → PCM response.
+//    Request body: raw PCM bytes (s16le, matching mic driver's AUDIO_PRESET).
+//    Response: 200 OK (response audio fetched separately by speaker driver).
 //
-//  Change this to point at your actual backend server.
+//  BACKEND_SPEAKER_URL: endpoint that returns the audio response as
+//    chunked raw PCM. The speaker driver streams and plays this.
+//
+//  These may be the same URL (backend handles both upload and response)
+//  or different endpoints. Adjust to match your backend API.
 // ============================================================================
-#define BACKEND_AUDIO_URL   "http://your-backend.example.com/api/speak"
+#define BACKEND_MIC_URL         "http://your-backend.example.com/api/listen"
+#define BACKEND_SPEAKER_URL     "http://your-backend.example.com/api/speak"
+
+// ============================================================================
+//  BUTTON HELPERS
+//
+//  Simple GPIO polling for push-to-talk. The 20ms poll interval provides
+//  basic debouncing — a brief contact bounce (<20ms) is filtered naturally.
+//
+//  To upgrade to GPIO interrupt-driven detection:
+//    1. Configure the pin with GPIO_INTR_NEGEDGE (press) / POSEDGE (release)
+//    2. Use a semaphore or task notification instead of polling
+//    3. Keep the same mic_start()/mic_stop() calls
+// ============================================================================
+#if PTT_BUTTON_ENABLED && MIC_ENABLED
+static bool button_pressed(void)
+{
+    return gpio_get_level(PTT_BUTTON_PIN) == 0;
+}
+#endif
 
 void voice_assistant_init(void)
 {
-    ESP_LOGI(TAG, "Voice assistant initialized");
+#if PTT_BUTTON_ENABLED && MIC_ENABLED
+    gpio_config_t io_conf = {
+        .pin_bit_mask  = (1ULL << PTT_BUTTON_PIN),
+        .mode          = GPIO_MODE_INPUT,
+        .pull_up_en    = GPIO_PULLUP_ENABLE,
+        .pull_down_en  = GPIO_PULLDOWN_DISABLE,
+        .intr_type     = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    ESP_LOGI(TAG, "Push-to-talk button configured on GPIO%d", PTT_BUTTON_PIN);
+#endif
+
+    ESP_LOGI(TAG, "Voice assistant initialized (MIC_ENABLED=%d, PTT_BUTTON=%d)",
+             MIC_ENABLED, PTT_BUTTON_ENABLED);
 }
 
 // ============================================================================
 //  VOICE ASSISTANT TASK
 //
-//  Connects the speaker driver to the backend in a loop:
-//    1. Wait for network
-//    2. Call speaker_play_url() — opens HTTP to backend, backend processes
-//       (LLM/TTS), streams PCM back, speaker plays it
-//    3. Wait for playback to finish
-//    4. Loop back to step 2
+//  Main conversation loop. After network is ready, enters one of two modes:
 //
-//  The call to speaker_play_url() is non-blocking — it returns immediately
-//  after spawning the internal network task. The network task holds the
-//  HTTP connection open, blocking on recv() until the backend sends data.
-//  No trigger mechanism needed: the backend decides when audio is ready.
+//  MIC_ENABLED=1 (push-to-talk):
+//    1. Wait for button press (or auto-record if PTT_BUTTON_ENABLED=0)
+//    2. Record mic audio
+//    3. Upload to backend
+//    4. Play backend's audio response
+//    5. Loop
+//
+//  MIC_ENABLED=0 (speaker-only):
+//    1. Call speaker_play_url() with the backend URL
+//    2. Wait for playback to finish
+//    3. Loop
+//
+//  Interaction sequence (MIC_ENABLED=1):
+//
+//    User        voice_assistant    mic_driver       speaker_driver   backend
+//    ────        ───────────────    ──────────       ──────────────   ───────
+//    press ─────► detected
+//                 ├─ mic_start() ──► I2S RX on
+//    hold         │                  recording...
+//    release ────► detected
+//                 ├─ mic_stop() ───► I2S RX off
+//                 ├─ mic_upload() ─► HTTP POST ─────────────────────► recv
+//                 │                  ...                                │ STT
+//                 │   IDLE ◄──────── done                              │ LLM
+//                 │                                                    │ TTS
+//                 ├─ speaker_play_url() ──────► HTTP POST ────────────►│
+//                 │                             recv()                  │
+//                 │                             ◄──── [PCM chunks]
+//                 │                             buffer → I2S → speaker
+//                 │   IDLE ◄────────────────── done
+//                 └── loop
 // ============================================================================
 void voice_assistant_task(void *param)
 {
@@ -91,38 +197,100 @@ void voice_assistant_task(void *param)
 
     ESP_LOGI(TAG, "Voice assistant task started");
 
-    // Step 1: Wait for network connectivity (Wi-Fi or PPP)
-    // Blocks until IP is acquired. Speaker playback task is already
-    // running (created at boot) but sleeping — nothing to play yet.
     network_app_wait_for_connection();
     ESP_LOGI(TAG, "Network ready — voice assistant active");
 
+#if MIC_ENABLED
+    // -----------------------------------------------------------------------
+    //  Push-to-talk conversation loop
+    // -----------------------------------------------------------------------
     while (1) {
-        // Step 2: Request audio from backend via speaker driver
-        //
-        // speaker_play_url() does the following internally:
-        //   a. Resets the stream buffer
-        //   b. Sets state = BUFFERING
-        //   c. Spawns speaker_network_task which opens HTTP POST
-        //   d. Returns immediately
-        //
-        // The network task then holds the connection open. The backend
-        // processes the request (LLM generates text, TTS converts to
-        // audio, transcodes to PCM) — this may take seconds. The
-        // network task is blocked on recv() the entire time (0% CPU).
-        // When the backend starts streaming PCM chunks, the network
-        // task wakes up and writes them into the stream buffer.
-        // When the buffer crosses the prebuffer threshold, the
-        // playback task wakes up and starts writing to I2S.
-        ESP_LOGI(TAG, "Requesting audio from backend: %s", BACKEND_AUDIO_URL);
-        speaker_play_url(BACKEND_AUDIO_URL);
+        // Step 1: Wait for recording trigger
+#if PTT_BUTTON_ENABLED
+        ESP_LOGI(TAG, "Waiting for button press (GPIO%d)...", PTT_BUTTON_PIN);
+        while (!button_pressed()) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        ESP_LOGI(TAG, "Button pressed — starting recording");
+#else
+        ESP_LOGI(TAG, "Auto-record: starting in 1 second...");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+#endif
 
-        // Step 3: Wait for playback to finish
-        //
-        // Poll speaker_get_state() until the driver returns to IDLE
-        // (normal completion) or ERROR. This is not a busy wait — each
-        // iteration sleeps 200ms. The scheduler runs the network and
-        // playback tasks during our sleep.
+        // Step 2: Start recording
+        mic_start();
+
+        // Step 3: Wait for recording end (button release or fixed duration)
+#if PTT_BUTTON_ENABLED
+        while (button_pressed()) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        ESP_LOGI(TAG, "Button released — stopping recording");
+#else
+        ESP_LOGI(TAG, "Auto-recording for %d ms...", PTT_AUTO_RECORD_MS);
+        vTaskDelay(pdMS_TO_TICKS(PTT_AUTO_RECORD_MS));
+#endif
+
+        // Step 4: Stop recording — audio data stays in stream buffer
+        mic_stop();
+
+        // Step 5: Upload captured audio to backend
+        ESP_LOGI(TAG, "Uploading audio to: %s", BACKEND_MIC_URL);
+        mic_upload(BACKEND_MIC_URL);
+
+        // Step 6: Wait for upload to complete
+        while (1) {
+            mic_state_t mic_state = mic_get_state();
+
+            if (mic_state == MIC_STATE_IDLE || mic_state == MIC_STATE_DONE) {
+                ESP_LOGI(TAG, "Upload complete");
+                break;
+            }
+            if (mic_state == MIC_STATE_ERROR) {
+                ESP_LOGE(TAG, "Upload error — skipping playback");
+                break;
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+
+        if (mic_get_state() == MIC_STATE_ERROR) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        // Step 7: Play backend's audio response
+        ESP_LOGI(TAG, "Playing response from: %s", BACKEND_SPEAKER_URL);
+        speaker_play_url(BACKEND_SPEAKER_URL);
+
+        // Step 8: Wait for playback to finish
+        while (1) {
+            speaker_state_t spk_state = speaker_get_state();
+
+            if (spk_state == SPEAKER_STATE_IDLE) {
+                ESP_LOGI(TAG, "Playback complete");
+                break;
+            }
+            if (spk_state == SPEAKER_STATE_ERROR) {
+                ESP_LOGE(TAG, "Playback error — check backend and network");
+                break;
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+
+        // Step 9: Brief pause before next interaction
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+
+#else
+    // -----------------------------------------------------------------------
+    //  Speaker-only loop (original behavior, no mic)
+    // -----------------------------------------------------------------------
+    while (1) {
+        ESP_LOGI(TAG, "Requesting audio from backend: %s", BACKEND_SPEAKER_URL);
+        speaker_play_url(BACKEND_SPEAKER_URL);
+
         while (1) {
             speaker_state_t state = speaker_get_state();
 
@@ -137,9 +305,6 @@ void voice_assistant_task(void *param)
 
             vTaskDelay(pdMS_TO_TICKS(200));
         }
-
-        // Step 4: Loop back to step 2
-        // The next speaker_play_url() opens a new HTTP connection.
-        // The backend can return different audio each time.
     }
+#endif
 }

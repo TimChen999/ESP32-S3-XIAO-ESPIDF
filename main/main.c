@@ -11,6 +11,7 @@
 #include "wifi_driver.h"
 #include "test_network.h"
 #include "speaker_driver.h"
+#include "mic_driver.h"
 #include "voice_assistant.h"
 
 #define TASK_STACK_SIZE     4096
@@ -47,7 +48,12 @@ void app_main(void)
     xTaskCreatePinnedToCore(speaker_playback_task, "speaker",
         TASK_STACK_SIZE, NULL, TASK_PRIORITY + 1, NULL, DRIVER_CORE);
 
-    // Voice assistant — application layer that triggers speaker playback
+    // Audio input — I2S mic driver (must init AFTER speaker for full-duplex)
+    mic_init();
+    xTaskCreatePinnedToCore(mic_capture_task, "mic_cap",
+        TASK_STACK_SIZE, NULL, TASK_PRIORITY + 1, NULL, DRIVER_CORE);
+
+    // Voice assistant — orchestrates mic + speaker for push-to-talk conversations
     voice_assistant_init();
     xTaskCreatePinnedToCore(voice_assistant_task, "voice_asst",
         TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL, DRIVER_CORE);
