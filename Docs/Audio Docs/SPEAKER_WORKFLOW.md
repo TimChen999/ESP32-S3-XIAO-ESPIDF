@@ -609,11 +609,108 @@ read and the I2S write. It's the only processing done on the PCM data.
   │   ├── speaker_play_url() Public API: start playback from URL
   │   └── speaker_playback_  Permanent I2S consumer task
   │       task()
+  ├── voice_assistant.c/h    Application layer — calls speaker_play_url()
   ├── modem_driver.c/h       (existing — unmodified)
   ├── wifi_driver.c/h        (existing — unmodified)
   ├── network_app.c/h        (existing — unmodified)
-  └── CMakeLists.txt         1 line changed: added "speaker_driver.c" to SRCS
+  └── CMakeLists.txt         added "speaker_driver.c" + "voice_assistant.c"
 ```
+
+---
+
+## Voice Assistant — System Integration
+
+The voice assistant task (`voice_assistant.c`) is the application-layer glue
+that connects the speaker driver to the backend. It is the only place in
+the system that calls `speaker_play_url()`.
+
+### Why It Exists
+
+The speaker driver is a reusable module — it knows how to play audio, but
+it doesn't know **when** to play. Something must call `speaker_play_url()`
+to initiate the HTTP connection. The voice assistant is that something.
+
+### What It Does
+
+```
+  voice_assistant_task()
+  │
+  ├── 1. Wait for network (blocks until Wi-Fi/PPP has IP)
+  │
+  └── 2. Loop forever:
+      │
+      ├── speaker_play_url(BACKEND_URL)
+      │     └── returns immediately (spawns network task internally)
+      │
+      ├── poll speaker_get_state() every 200ms
+      │     └── wait for IDLE or ERROR
+      │
+      └── loop back to speaker_play_url()
+```
+
+### How the Blocking Works End to End
+
+The voice assistant does NOT need to detect when the backend has audio
+ready. The HTTP connection handles this automatically:
+
+```
+  voice_assistant                speaker driver              backend
+  ───────────────                ──────────────              ───────
+
+  speaker_play_url()
+       │
+       └──► spawns network task
+                  │
+                  └──► HTTP POST ──────────────────────────► received
+                       (connection stays open)                │
+                                                              │ processing...
+                                                              │ LLM → TTS
+                       recv() is BLOCKING                     │ transcode
+                       (task suspended, 0% CPU)               │
+                       ...                                    │
+                       ...                                    ▼
+                       ◄────────────────── chunk: [1024 PCM bytes]
+                       recv() returns!
+                       writes to buffer ──► playback task wakes
+                                            I2S starts
+                       ◄────────────────── chunk: [1024 PCM bytes]
+                       ...
+                       ◄────────────────── chunk: 0 (end)
+                       state = DRAINING
+                       self-deletes
+
+  sees IDLE ◄─────── playback task drains buffer, STOPPED → IDLE
+
+  calls speaker_play_url() again
+  (next request, next response)
+```
+
+The network task's `esp_http_client_read()` is a blocking call. The task
+is suspended by the OS at 0% CPU. When the backend sends the first byte
+(which could be seconds later, after LLM/TTS processing), the Wi-Fi
+hardware fires an interrupt, the TCP stack processes it, and the
+scheduler wakes the task. No polling, no trigger detection needed.
+
+### Task Priority Map
+
+```
+  Priority 6:  speaker_playback_task   (permanent, driver-internal)
+                 └── I2S consumer — always gets CPU first
+
+  Priority 5:  voice_assistant_task    (permanent, application layer)
+                 └── calls speaker_play_url(), polls state
+               speaker_network_task   (ephemeral, driver-internal)
+                 └── HTTP producer — spawned per playback
+
+  Priority 4:  network_app_task       (existing)
+               test_network_task      (existing)
+```
+
+The voice assistant and the network task both run at priority 5 but never
+compete: the voice assistant is blocked in `vTaskDelay` (polling state)
+while the network task is blocked in `recv()` (waiting for backend data).
+The playback task at priority 6 preempts both whenever the stream buffer
+has data to consume.
 
 ---
 
