@@ -14,16 +14,43 @@
 
 static const char *TAG = "MODEM_DRV";
 
-// SIM PIN: Set modem PIN TODO: This should come from some config file or smth
-#define DEFAULT_SIM_PIN "0000"
+// ============================================================================
+//  PIN & UART CONFIGURATION — Driver Side
+//
+//  Physical wiring (see diagram.json):
+//    Driver TX  (D0) ───green wire──► Modem RX  (D8)
+//    Modem TX   (D5) ───blue wire───► Driver RX (D1)
+//
+//  Flow control wiring (optional — set FLOW_CONTROL_ENABLED to 1):
+//    Driver RTS (D2) ───yellow wire─► Modem CTS  (D9)
+//    Modem RTS  (D4) ───orange wire─► Driver CTS (D3)
+//
+//  UART0 (D6=TX, D7=RX) is reserved for the console.
+// ============================================================================
+#define DRIVER_UART_NUM     1
+#define DRIVER_TX_PIN       1            // D0 on XIAO (GPIO1)
+#define DRIVER_RX_PIN       2            // D1 on XIAO (GPIO2)
+#define DRIVER_RTS_PIN      3            // D2 on XIAO (GPIO3, flow control)
+#define DRIVER_CTS_PIN      4            // D3 on XIAO (GPIO4, flow control)
+#define UART_BAUD           115200
+#define FLOW_CONTROL_ENABLED  0
 
-// MAX FAILURES: the max number of time modem handshake can fail before fatal
+static modem_driver_config_t s_modem_driver_cfg = {
+    .uart_num      = DRIVER_UART_NUM,
+    .tx_pin        = DRIVER_TX_PIN,
+    .rx_pin        = DRIVER_RX_PIN,
+    .rts_pin       = FLOW_CONTROL_ENABLED ? DRIVER_RTS_PIN : -1,
+    .cts_pin       = FLOW_CONTROL_ENABLED ? DRIVER_CTS_PIN : -1,
+    .baud_rate     = UART_BAUD,
+    .flow_control  = FLOW_CONTROL_ENABLED,
+    .state         = MODEM_DRIVER_IDLE,
+};
+
+#define DEFAULT_SIM_PIN "0000"
 #define MAX_FAILS_GETIP 10
 
-// Echo state: Will it echo? True when ATE0 succeeds so read_response can skip stripping
 static bool g_echo_disabled = false;
 
-// Config pointer for modem_driver_get_state (set in init, used by task)
 static modem_driver_config_t *s_config = NULL;
 
 // ============================================================================
@@ -119,14 +146,13 @@ modem_driver_state_t modem_driver_get_state(void)
     return (s_config != NULL) ? s_config->state : MODEM_DRIVER_IDLE;
 }
 
-void modem_driver_init(modem_driver_config_t *config)
+void modem_driver_init(void)
 {
+    modem_driver_config_t *config = &s_modem_driver_cfg;
     s_config = config;
-    // 1. Set state variable in config to IDLE (init), used for debug/observability
     config->state = MODEM_DRIVER_IDLE;
 
-    // 2. Describe the UART's electrical parameters: baud rate, word format,
-    //    and flow control. Must match what the modem on the other end expects.
+    // 2. Describe the UART's electrical parameters
     //    8N1 (8 data bits, no parity, 1 stop bit) is universal for AT modems.
     uart_config_t uart_cfg = {
         .baud_rate           = config->baud_rate,
@@ -139,14 +165,13 @@ void modem_driver_init(modem_driver_config_t *config)
         .rx_flow_ctrl_thresh = 122,
     };
 
-    // 3. Apply the config to the UART peripheral registers. After this,
-    //    the hardware knows the baud rate and framing but has no pin
-    //    assignments or software buffers yet.
+    // 3. Apply the config to the UART peripheral registers.
+    //    Hardware knows the baud rate and framing
+    //    No pin assignments or software buffers yet.
     uart_param_config(config->uart_num, &uart_cfg);
 
-    // 4. Route the UART's TX, RX, RTS, and CTS signals to physical GPIO pins
-    //    via the GPIO matrix. When flow control is off, rts_pin and cts_pin
-    //    are -1, so those signals stay unconnected.
+    // 4. Route TX, RX, RTS, and CTS signals to physical GPIO pins (via GPIO matrix)
+    //    When flow control is off, rts_pin and cts_pin = -1 (signals unconnected)
     uart_set_pin(config->uart_num,
                  config->tx_pin, config->rx_pin,
                  config->rts_pin, config->cts_pin);
@@ -170,9 +195,8 @@ void modem_driver_init(modem_driver_config_t *config)
 //  Sends one AT command and reads the response. Used by all higher-level
 //  functions (modem_check_sim, modem_register_network, etc.).
 //
-//    1. Flush any stale data in the UART RX buffer so we don't see old
-//       responses or garbage from a previous command.
-//    2. Send the command (send_command_raw) and read until a terminator
+//    1. Flush stale data in RX buffer (no old response/garbage from prev command)
+//    2. Send the command (using send_command_raw) and read until a terminator
 //       (read_response). On success, log the response and return length.
 //    3. On timeout or garbled (buffer full without terminator), flush RX
 //       and retry up to MODEM_SEND_AT_RETRIES. Return -1 if all attempts fail.
@@ -751,15 +775,18 @@ static ppp_phase2_action_t modem_run_ppp_phase2(modem_driver_config_t *config)
 
 void modem_driver_task(void *param)
 {
-    modem_driver_config_t *config = (modem_driver_config_t *)param;
+    (void)param;
+    modem_driver_config_t *config = s_config;
 
     ESP_LOGI(TAG, "modem_driver_task started");
 
     // -----------------------------------------------------------------------
     // Step 1 (FSM S0→S1): Wait for modem to boot.
-    // The sim_modem_task boots in 1.5s. We wait 3s to be safe — on real
-    // hardware, modems can take 5-15s. modem_check_sim() retries handle
-    // the case where we start too early.
+    // The sim_modem_task boots in 1.5s. We wait 3s to be safe 
+    // 
+    // NOTE: on real hardware, modems can take 5-15s. modem_check_sim() 
+    // retries handle the case where we start too early. 
+    // Also check if the real modem has some other startup sequence
     // -----------------------------------------------------------------------
     printf("Driver: waiting 3 seconds for modem to boot...\n");
     vTaskDelay(pdMS_TO_TICKS(3000));

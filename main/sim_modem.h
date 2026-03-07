@@ -99,13 +99,11 @@ typedef struct {
 // ---------------------------------------------------------------------------
 //  sim_modem_init
 //
-//  Called once before starting the task.
-//  TODO:
-//    1. Configure the UART peripheral (uart_num) with the given baud/pins
-//    2. Install the UART driver with appropriate RX/TX buffer sizes
-//    3. Set initial state to SIM_MODEM_STATE_OFF
+//  Called once before starting the task. Configures the UART peripheral,
+//  installs the driver, and sets initial state to OFF.  Pin assignments
+//  and UART parameters are defined inside sim_modem.c.
 // ---------------------------------------------------------------------------
-void sim_modem_init(sim_modem_config_t *config);
+void sim_modem_init(void);
 
 // ---------------------------------------------------------------------------
 //  sim_modem_task

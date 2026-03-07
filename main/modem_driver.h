@@ -167,16 +167,12 @@ modem_driver_state_t modem_driver_get_state(void);
 // ---------------------------------------------------------------------------
 //  modem_driver_init
 //
-//  Called once before starting the task.
-//  TODO:
-//    1. Configure UART peripheral (same pattern as sim_modem_init)
-//    2. Install UART driver with RX/TX buffers
-//    3. Set state = MODEM_DRIVER_IDLE
-//
-//  NOTE: Identical UART setup code as sim_modem_init — on real hardware
-//  you'd only have THIS side (the sim side wouldn't exist).
+//  Called once before starting the task. Configures the UART peripheral,
+//  installs the driver, and sets state to IDLE.  Pin assignments and UART
+//  parameters are defined inside modem_driver.c.  On real hardware only
+//  this side exists (the sim side wouldn't exist).
 // ---------------------------------------------------------------------------
-void modem_driver_init(modem_driver_config_t *config);
+void modem_driver_init(void);
 
 // ---------------------------------------------------------------------------
 //  modem_send_at

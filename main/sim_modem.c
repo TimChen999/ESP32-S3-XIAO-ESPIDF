@@ -8,6 +8,38 @@
 
 static const char *TAG = "SIM_MODEM";
 
+// ============================================================================
+//  PIN & UART CONFIGURATION — Simulated Modem Side
+//
+//  Physical wiring (see diagram.json):
+//    Modem TX  (D5) ───blue wire───► Driver RX (D1)
+//    Driver TX (D0) ───green wire──► Modem RX  (D8)
+//
+//  Flow control wiring (optional — set FLOW_CONTROL_ENABLED to 1):
+//    Modem RTS (D4) ───orange wire─► Driver CTS (D3)
+//    Driver RTS(D2) ───yellow wire─► Modem CTS  (D9)
+//
+//  UART0 (D6=TX, D7=RX) is reserved for the console.
+// ============================================================================
+#define MODEM_SIM_UART_NUM  2
+#define MODEM_SIM_TX_PIN    6            // D5 on XIAO (GPIO6)
+#define MODEM_SIM_RX_PIN    7            // D8 on XIAO (GPIO7)
+#define MODEM_SIM_RTS_PIN   5            // D4 on XIAO (GPIO5, flow control)
+#define MODEM_SIM_CTS_PIN   8            // D9 on XIAO (GPIO8, flow control)
+#define UART_BAUD           115200
+#define FLOW_CONTROL_ENABLED  0
+
+static sim_modem_config_t s_sim_modem_cfg = {
+    .uart_num      = MODEM_SIM_UART_NUM,
+    .tx_pin        = MODEM_SIM_TX_PIN,
+    .rx_pin        = MODEM_SIM_RX_PIN,
+    .rts_pin       = FLOW_CONTROL_ENABLED ? MODEM_SIM_RTS_PIN : -1,
+    .cts_pin       = FLOW_CONTROL_ENABLED ? MODEM_SIM_CTS_PIN : -1,
+    .baud_rate     = UART_BAUD,
+    .flow_control  = FLOW_CONTROL_ENABLED,
+    .state         = SIM_MODEM_STATE_OFF,
+};
+
 // Real modems default to echo ON (ATE1). Every character the driver sends is
 // echoed back before the modem's actual response. ATE0 disables this.
 static int echo_enabled = 1;
@@ -1035,11 +1067,9 @@ static void handle_ppp_data_mode(sim_modem_config_t *config)
 //  PUBLIC API
 // ============================================================================
 
-void sim_modem_init(sim_modem_config_t *config)
+void sim_modem_init(void)
 {
-    // 1. Set initial state to OFF so the task knows the modem hasn't booted yet.
-    //    The sim_modem_task will delay (power-on) then transition to READY before
-    //    accepting AT commands — the driver must not send until the modem is READY.
+    sim_modem_config_t *config = &s_sim_modem_cfg;
     config->state = SIM_MODEM_STATE_OFF;
 
     // 2. Describe the UART's electrical parameters: baud rate, word format,
@@ -1086,7 +1116,8 @@ void sim_modem_init(sim_modem_config_t *config)
 
 void sim_modem_task(void *param)
 {
-    sim_modem_config_t *config = (sim_modem_config_t *)param;
+    (void)param;
+    sim_modem_config_t *config = &s_sim_modem_cfg;
     char line_buf[256];
 
     // -----------------------------------------------------------------------

@@ -78,22 +78,45 @@ The simulator uses `diagram.json` (circuit) and `wokwi.toml` (firmware paths). T
 
 If you prefer the terminal or have ESP-IDF installed separately:
 
-### Prerequisites
+### 1. Install ESP-IDF (first time only)
 
-1. **ESP-IDF v5.0+** — install and run the export script:
+Download and run the ESP-IDF installer, or clone the repo manually.
+Then run the install script to set up the toolchains and Python virtual environment:
 
-   ```bash
-   # Linux/macOS
-   . $HOME/esp/esp-idf/export.sh
+```bash
+# Linux/macOS
+./install.sh
 
-   # Windows (cmd)
-   %userprofile%\esp\esp-idf\export.bat
+# Windows (PowerShell)
+C:\esp\v5.5.3\esp-idf\install.ps1
 
-   # Windows (PowerShell)
-   . $env:USERPROFILE\esp\esp-idf\export.ps1
-   ```
+# Windows (cmd)
+C:\esp\v5.5.3\esp-idf\install.bat
+```
 
-### Build and flash
+> **Re-run the install script** if you update Python, move folders, or see
+> errors about a missing Python virtual environment.
+
+### 2. Export the environment (every new terminal)
+
+The export script adds the ESP-IDF toolchain and `idf.py` to your `PATH`
+for the current terminal session. You must run it every time you open a
+new terminal window:
+
+```bash
+# Linux/macOS
+. $HOME/esp/esp-idf/export.sh
+
+# Windows (PowerShell)
+C:\esp\v5.5.3\esp-idf\export.ps1
+
+# Windows (cmd)
+C:\esp\v5.5.3\esp-idf\export.bat
+```
+
+After this, `idf.py` should be available.
+
+### 3. Build and flash
 
 ```bash
 idf.py set-target esp32s3
