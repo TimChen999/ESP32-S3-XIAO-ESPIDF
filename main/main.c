@@ -11,6 +11,7 @@
 #include "wifi_driver.h"
 #include "test_network.h"
 #include "speaker_driver.h"
+#include "voice_assistant.h"
 
 #define TASK_STACK_SIZE     4096
 #define MODEM_SIM_CORE      0
@@ -45,6 +46,11 @@ void app_main(void)
     speaker_init();
     xTaskCreatePinnedToCore(speaker_playback_task, "speaker",
         TASK_STACK_SIZE, NULL, TASK_PRIORITY + 1, NULL, DRIVER_CORE);
+
+    // Voice assistant — application layer that triggers speaker playback
+    voice_assistant_init();
+    xTaskCreatePinnedToCore(voice_assistant_task, "voice_asst",
+        TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL, DRIVER_CORE);
 
     xTaskCreatePinnedToCore(network_app_task, "app_task",
         TASK_STACK_SIZE * 2, NULL, TASK_PRIORITY - 1, NULL, DRIVER_CORE);
