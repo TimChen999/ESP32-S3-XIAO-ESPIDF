@@ -10,6 +10,7 @@
 #include "network_app.h"
 #include "wifi_driver.h"
 #include "test_network.h"
+#include "speaker_driver.h"
 
 #define TASK_STACK_SIZE     4096
 #define MODEM_SIM_CORE      0
@@ -39,6 +40,11 @@ void app_main(void)
     //     TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL, MODEM_SIM_CORE);
     // xTaskCreatePinnedToCore(modem_driver_task, "modem_driver",
     //     TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL, DRIVER_CORE);
+
+    // Audio output — I2S speaker driver
+    speaker_init();
+    xTaskCreatePinnedToCore(speaker_playback_task, "speaker",
+        TASK_STACK_SIZE, NULL, TASK_PRIORITY + 1, NULL, DRIVER_CORE);
 
     xTaskCreatePinnedToCore(network_app_task, "app_task",
         TASK_STACK_SIZE * 2, NULL, TASK_PRIORITY - 1, NULL, DRIVER_CORE);
