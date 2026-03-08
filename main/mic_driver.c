@@ -16,7 +16,7 @@
 
 #if MIC_SIMULATE
 #ifndef AUDIO_BRIDGE_MIC_URL
-#define AUDIO_BRIDGE_MIC_URL    "http://10.13.37.1:8080/mic"
+#define AUDIO_BRIDGE_MIC_URL    "http://host.wokwi.internal:8080/mic"
 #endif
 #endif
 

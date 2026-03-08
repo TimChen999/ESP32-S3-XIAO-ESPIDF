@@ -227,13 +227,13 @@
 //  The backend distinguishes mic upload vs speaker fetch by checking
 //  whether the request body is empty.
 //
-//  Wokwi:     use 10.13.37.1 (virtual gateway to host localhost)
+//  Wokwi:     use host.wokwi.internal (resolves to the host PC)
 //  Hardware:  use the backend machine's LAN IP (e.g. 192.168.1.100)
 //
 //  Used by: voice_assistant.c
 // ============================================================================
-#define BACKEND_MIC_URL         "http://10.13.37.1:5000/api/conversation"
-#define BACKEND_SPEAKER_URL     "http://10.13.37.1:5000/api/conversation"
+#define BACKEND_MIC_URL         "http://host.wokwi.internal:5000/api/conversation"
+#define BACKEND_SPEAKER_URL     "http://host.wokwi.internal:5000/api/conversation"
 
 // ============================================================================
 //  AUDIO BRIDGE URLS — Wokwi Simulation Only
@@ -250,7 +250,7 @@
 //
 //  Used by: mic_driver.c, speaker_driver.c
 // ============================================================================
-#define AUDIO_BRIDGE_MIC_URL      "http://10.13.37.1:8080/mic"
-#define AUDIO_BRIDGE_SPEAKER_URL  "http://10.13.37.1:8080/speaker"
+#define AUDIO_BRIDGE_MIC_URL      "http://host.wokwi.internal:8080/mic"
+#define AUDIO_BRIDGE_SPEAKER_URL  "http://host.wokwi.internal:8080/speaker"
 
 #endif /* BOARD_CONFIG_H */

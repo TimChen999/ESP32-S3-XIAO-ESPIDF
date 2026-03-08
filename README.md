@@ -70,7 +70,9 @@ Build the project first (via ESP-IDF extension or `idf.py build`). Wokwi uses th
 1. Press **F1** (or **Ctrl+Shift+P**).
 2. Run **Wokwi: Start Simulator**.
 
-The simulator uses `diagram.json` (circuit) and `wokwi.toml` (firmware paths). The diagram cross-wires UART1 and UART2 on the XIAO ESP32-S3 as required by the modem simulator.
+The simulator uses `diagram.json` (circuit) and `wokwi.toml` (firmware paths and networking). The diagram cross-wires UART1 and UART2 on the XIAO ESP32-S3 as required by the modem simulator.
+
+**Important:** `wokwi.toml` must include `[net] enable = true` so the simulated ESP32 can reach services on your PC via the `host.wokwi.internal` hostname. This is already configured in the project.
 
 ### 5. Audio bridge — use your PC mic and speakers (optional)
 
@@ -92,7 +94,7 @@ The bridge opens two endpoints on `localhost:8080`:
 - `GET /mic` — records a chunk from your PC microphone, returns raw PCM
 - `POST /speaker` — receives raw PCM, plays it on your PC speakers
 
-The ESP32 firmware calls these endpoints from the simulate branches of the capture and playback loops. The bridge URL defaults to `http://10.13.37.1:8080` (Wokwi's gateway to the host). Override by changing `AUDIO_BRIDGE_MIC_URL` and `AUDIO_BRIDGE_SPEAKER_URL` in `main/board_config.h` if your setup uses a different address.
+The ESP32 firmware calls these endpoints from the simulate branches of the capture and playback loops. The bridge URL defaults to `http://host.wokwi.internal:8080` (Wokwi's hostname for reaching the host PC). Override by changing `AUDIO_BRIDGE_MIC_URL` and `AUDIO_BRIDGE_SPEAKER_URL` in `main/board_config.h` if your setup uses a different address.
 
 **Optional bridge flags:**
 
@@ -126,12 +128,12 @@ All deployment-specific settings are centralised in `main/board_config.h`:
 | `SPEAKER_SIMULATE` | `1` | Routes speaker I2S writes through the PC audio bridge |
 | `WIFI_SSID` | `Wokwi-GUEST` | Wokwi's built-in simulated Wi-Fi AP |
 | `WIFI_PASS` | `""` (empty) | No password for Wokwi-GUEST |
-| `BACKEND_MIC_URL` | `http://10.13.37.1:5000/api/conversation` | Endpoint the ESP POSTs recorded PCM to |
-| `BACKEND_SPEAKER_URL` | `http://10.13.37.1:5000/api/conversation` | Endpoint the ESP POSTs (empty body) to fetch reply PCM |
-| `AUDIO_BRIDGE_MIC_URL` | `http://10.13.37.1:8080/mic` | Audio bridge mic endpoint (Wokwi only) |
-| `AUDIO_BRIDGE_SPEAKER_URL` | `http://10.13.37.1:8080/speaker` | Audio bridge speaker endpoint (Wokwi only) |
+| `BACKEND_MIC_URL` | `http://host.wokwi.internal:5000/api/conversation` | Endpoint the ESP POSTs recorded PCM to |
+| `BACKEND_SPEAKER_URL` | `http://host.wokwi.internal:5000/api/conversation` | Endpoint the ESP POSTs (empty body) to fetch reply PCM |
+| `AUDIO_BRIDGE_MIC_URL` | `http://host.wokwi.internal:8080/mic` | Audio bridge mic endpoint (Wokwi only) |
+| `AUDIO_BRIDGE_SPEAKER_URL` | `http://host.wokwi.internal:8080/speaker` | Audio bridge speaker endpoint (Wokwi only) |
 
-The address `10.13.37.1` is Wokwi's virtual gateway that maps to `localhost` on the host PC. Port `5000` must match the backend's `esp_audio.port` setting. Both URLs point to the same `/api/conversation` endpoint — the backend distinguishes mic upload (body has audio) from speaker fetch (body is empty).
+The hostname `host.wokwi.internal` is resolved by Wokwi's DNS to route traffic to the host PC's localhost. Port `5000` must match the backend's `esp_audio.port` setting. Both URLs point to the same `/api/conversation` endpoint — the backend distinguishes mic upload (body has audio) from speaker fetch (body is empty).
 
 ### Matching backend config (must be set in the backend project)
 
@@ -154,7 +156,7 @@ change these values in `main/board_config.h`:
 | `SPEAKER_SIMULATE` | `0` | Uses real I2S hardware instead of the audio bridge |
 | `WIFI_SSID` | Your Wi-Fi network name | The real AP the ESP connects to |
 | `WIFI_PASS` | Your Wi-Fi password | WPA2 passphrase |
-| `BACKEND_MIC_URL` | `http://<BACKEND_LAN_IP>:5000/api/conversation` | Replace `10.13.37.1` with the backend server's actual LAN IP (e.g. `192.168.1.100`) |
+| `BACKEND_MIC_URL` | `http://<BACKEND_LAN_IP>:5000/api/conversation` | Replace `host.wokwi.internal` with the backend server's actual LAN IP (e.g. `192.168.1.100`) |
 | `BACKEND_SPEAKER_URL` | `http://<BACKEND_LAN_IP>:5000/api/conversation` | Same IP as mic URL |
 
 Additional production considerations:

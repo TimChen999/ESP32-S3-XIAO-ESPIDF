@@ -90,7 +90,7 @@
 //
 //  PTT_BUTTON_PIN is set in board_config.h.
 // ============================================================================
-#define PTT_BUTTON_ENABLED      1
+#define PTT_BUTTON_ENABLED      0
 #define PTT_AUTO_RECORD_MS      3000
 
 #if PTT_BUTTON_ENABLED && MIC_ENABLED

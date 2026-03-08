@@ -65,8 +65,8 @@ The two URLs are defined in `main/board_config.h` (centralised with all
 other board-specific settings):
 
 ```c
-#define BACKEND_MIC_URL         "http://10.13.37.1:5000/api/conversation"
-#define BACKEND_SPEAKER_URL     "http://10.13.37.1:5000/api/conversation"
+#define BACKEND_MIC_URL         "http://host.wokwi.internal:5000/api/conversation"
+#define BACKEND_SPEAKER_URL     "http://host.wokwi.internal:5000/api/conversation"
 ```
 
 ---
@@ -305,8 +305,8 @@ mic and speakers. The backend runs on the same PC.
   │  │ GET  /health      │        │   body = empty → return audio  │    │
   │  └────────▲──────────┘        └──────────▲─────────────────────┘    │
   │           │                              │                          │
-  │           │ Wokwi gateway:               │ Wokwi gateway:           │
-  │           │ 10.13.37.1:8080              │ 10.13.37.1:5000          │
+  │           │ Wokwi host:                    │ Wokwi host:              │
+  │           │ host.wokwi.internal:8080     │ host.wokwi.internal:5000 │
   │           │                              │                          │
   └───────────┼──────────────────────────────┼──────────────────────────┘
               │                              │
@@ -358,21 +358,21 @@ Wi-Fi credentials for the simulated network:
 
 ```c
 // Backend
-#define BACKEND_MIC_URL         "http://10.13.37.1:5000/api/conversation"
-#define BACKEND_SPEAKER_URL     "http://10.13.37.1:5000/api/conversation"
+#define BACKEND_MIC_URL         "http://host.wokwi.internal:5000/api/conversation"
+#define BACKEND_SPEAKER_URL     "http://host.wokwi.internal:5000/api/conversation"
 
 // Audio bridge (Wokwi simulation only)
-#define AUDIO_BRIDGE_MIC_URL    "http://10.13.37.1:8080/mic"
-#define AUDIO_BRIDGE_SPEAKER_URL "http://10.13.37.1:8080/speaker"
+#define AUDIO_BRIDGE_MIC_URL    "http://host.wokwi.internal:8080/mic"
+#define AUDIO_BRIDGE_SPEAKER_URL "http://host.wokwi.internal:8080/speaker"
 
 // Wi-Fi
 #define WIFI_SSID               "Wokwi-GUEST"
 #define WIFI_PASS               ""
 ```
 
-`10.13.37.1` is Wokwi's virtual gateway that routes to your PC's
-`localhost`. The ports must match the services running on your PC
-(`5000` for the backend, `8080` for the audio bridge).
+`host.wokwi.internal` is a special hostname that Wokwi's DNS resolves
+to the host PC's localhost. The ports must match the services running
+on your PC (`5000` for the backend, `8080` for the audio bridge).
 
 **2. Enable simulation mode**
 
@@ -745,7 +745,7 @@ is still generating the rest of the response.
 | Audio cuts out / choppy            | Network too slow for real-time streaming   | Increase `RING_BUFFER_SIZE` in speaker_driver.c.               |
 | `HTTP read error` during playback  | Backend closed connection early            | Ensure backend sends complete PCM before closing.              |
 | Wokwi can't reach backend          | Backend bound to 127.0.0.1                 | Bind to `0.0.0.0` so Wokwi gateway can route to it.           |
-| Audio bridge works but backend doesn't | Different ports, wrong gateway IP       | Audio bridge uses :8080, backend uses :5000. Both via 10.13.37.1. |
+| Audio bridge works but backend doesn't | Different ports, wrong hostname         | Audio bridge uses :8080, backend uses :5000. Both via host.wokwi.internal. |
 
 ---
 
@@ -781,18 +781,18 @@ No other firmware files need to be modified.
 
 ## FAQ — Backend Integration
 
-### Q: What are the two URLs (`10.13.37.1:5000` and `localhost:8080`) and which service does each belong to?
+### Q: What are the two URLs (`host.wokwi.internal:5000` and `localhost:8080`) and which service does each belong to?
 
 They belong to two completely separate services that serve different
 purposes:
 
-- **`10.13.37.1:5000`** reaches your **Python backend** (`your_backend.py`).
-  This is the brain of the system — it receives mic audio, runs it through
-  STT, sends the transcript to an LLM, generates a TTS response, and
-  returns the audio. The address `10.13.37.1` is a Wokwi-specific virtual
-  gateway that maps to `localhost` on your PC, so the simulated ESP32 can
-  reach services running on the host machine. Port `5000` is the default
-  Flask port.
+- **`host.wokwi.internal:5000`** reaches your **Python backend**
+  (`your_backend.py`). This is the brain of the system — it receives mic
+  audio, runs it through STT, sends the transcript to an LLM, generates
+  a TTS response, and returns the audio. The hostname `host.wokwi.internal`
+  is resolved by Wokwi's DNS to the host PC's localhost, so the simulated
+  ESP32 can reach services running on the host machine. Port `5000` is the
+  default Flask port.
 
 - **`localhost:8080`** reaches the **audio bridge** (`audio_bridge.py`).
   This service only exists for Wokwi simulation. It acts as a stand-in for
@@ -840,8 +840,8 @@ All network settings are centralised in `main/board_config.h`:
 same machine. The ESP32 — whether simulated in Wokwi or running on real
 hardware — is a different network host:
 
-- **Wokwi:** The simulated ESP32 reaches your PC through the virtual
-  gateway `10.13.37.1`. Traffic arriving through that gateway enters
+- **Wokwi:** The simulated ESP32 reaches your PC through the hostname
+  `host.wokwi.internal`. Traffic arriving through the gateway enters
   your PC on a network interface, not on loopback. A server bound to
   `127.0.0.1` will refuse the connection.
 - **Real hardware:** The ESP32 connects over Wi-Fi to your PC's LAN IP
