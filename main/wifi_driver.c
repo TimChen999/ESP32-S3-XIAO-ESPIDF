@@ -10,12 +10,20 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "board_config.h"
+
 // ============================================================================
 //  WIFI CONFIGURATION
+//
+//  WIFI_SSID and WIFI_PASS are set in board_config.h.
+//  The fallbacks below apply only if board_config.h doesn't define them.
 // ============================================================================
-
-#define WIFI_SSID      "Wokwi-GUEST" // Default simulated Wokwi wifi
+#ifndef WIFI_SSID
+#define WIFI_SSID      "Wokwi-GUEST"
+#endif
+#ifndef WIFI_PASS
 #define WIFI_PASS      ""
+#endif
 #define MAXIMUM_RETRY  5
 
 static const char *TAG = "WIFI_DRIVER";

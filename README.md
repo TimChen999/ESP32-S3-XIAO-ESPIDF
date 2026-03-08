@@ -74,7 +74,7 @@ The simulator uses `diagram.json` (circuit) and `wokwi.toml` (firmware paths). T
 
 ### 5. Audio bridge — use your PC mic and speakers (optional)
 
-When the firmware is built with `MIC_SIMULATE=1` and `SPEAKER_SIMULATE=1`, the mic and speaker drivers route audio through a Python HTTP bridge running on your PC instead of using I2S hardware. This lets you have a real voice conversation through the Wokwi simulator.
+When `MIC_SIMULATE=1` and `SPEAKER_SIMULATE=1` are set in `main/board_config.h`, the mic and speaker drivers route audio through a Python HTTP bridge running on your PC instead of using I2S hardware. This lets you have a real voice conversation through the Wokwi simulator.
 
 **Install the bridge dependencies (one time):**
 
@@ -92,7 +92,7 @@ The bridge opens two endpoints on `localhost:8080`:
 - `GET /mic` — records a chunk from your PC microphone, returns raw PCM
 - `POST /speaker` — receives raw PCM, plays it on your PC speakers
 
-The ESP32 firmware calls these endpoints from the simulate branches of the capture and playback loops. The bridge URL defaults to `http://10.13.37.1:8080` (Wokwi's gateway to the host). Override with `-DAUDIO_BRIDGE_MIC_URL=...` or `-DAUDIO_BRIDGE_SPEAKER_URL=...` at build time if your setup uses a different address.
+The ESP32 firmware calls these endpoints from the simulate branches of the capture and playback loops. The bridge URL defaults to `http://10.13.37.1:8080` (Wokwi's gateway to the host). Override by changing `AUDIO_BRIDGE_MIC_URL` and `AUDIO_BRIDGE_SPEAKER_URL` in `main/board_config.h` if your setup uses a different address.
 
 **Optional bridge flags:**
 
@@ -109,6 +109,63 @@ curl http://localhost:8080/health
 curl http://localhost:8080/mic -o chunk.raw
 curl -X POST http://localhost:8080/speaker --data-binary @chunk.raw
 ```
+
+---
+
+## Backend Integration Configuration
+
+The voice assistant firmware connects to the Python backend (Character AI push-to-talk) over HTTP. This section lists every config that links the two systems and how to adjust them.
+
+### Configs set for Wokwi simulation (current)
+
+All deployment-specific settings are centralised in `main/board_config.h`:
+
+| Config | Current value | Purpose |
+|--------|---------------|---------|
+| `MIC_SIMULATE` | `1` | Routes mic I2S reads through the PC audio bridge |
+| `SPEAKER_SIMULATE` | `1` | Routes speaker I2S writes through the PC audio bridge |
+| `WIFI_SSID` | `Wokwi-GUEST` | Wokwi's built-in simulated Wi-Fi AP |
+| `WIFI_PASS` | `""` (empty) | No password for Wokwi-GUEST |
+| `BACKEND_MIC_URL` | `http://10.13.37.1:5000/api/conversation` | Endpoint the ESP POSTs recorded PCM to |
+| `BACKEND_SPEAKER_URL` | `http://10.13.37.1:5000/api/conversation` | Endpoint the ESP POSTs (empty body) to fetch reply PCM |
+| `AUDIO_BRIDGE_MIC_URL` | `http://10.13.37.1:8080/mic` | Audio bridge mic endpoint (Wokwi only) |
+| `AUDIO_BRIDGE_SPEAKER_URL` | `http://10.13.37.1:8080/speaker` | Audio bridge speaker endpoint (Wokwi only) |
+
+The address `10.13.37.1` is Wokwi's virtual gateway that maps to `localhost` on the host PC. Port `5000` must match the backend's `esp_audio.port` setting. Both URLs point to the same `/api/conversation` endpoint — the backend distinguishes mic upload (body has audio) from speaker fetch (body is empty).
+
+### Matching backend config (must be set in the backend project)
+
+The backend must have these set in its `.env` (or equivalent):
+
+| Backend config | Value | Why |
+|----------------|-------|-----|
+| `PTT_ESP_AUDIO__ENABLED` | `true` | Starts the Flask conversation server that the ESP connects to |
+| `PTT_ESP_AUDIO__HOST` | `0.0.0.0` | Binds to all interfaces so Wokwi gateway / Wi-Fi can reach it |
+| `PTT_ESP_AUDIO__PORT` | `5000` | Must match the port in `BACKEND_MIC_URL` / `BACKEND_SPEAKER_URL` |
+
+### Configuring for real hardware (production)
+
+When deploying on a physical ESP32-S3 XIAO with real I2S mic and speaker,
+change these values in `main/board_config.h`:
+
+| Config | Change to | Why |
+|--------|-----------|-----|
+| `MIC_SIMULATE` | `0` | Uses real I2S hardware instead of the audio bridge |
+| `SPEAKER_SIMULATE` | `0` | Uses real I2S hardware instead of the audio bridge |
+| `WIFI_SSID` | Your Wi-Fi network name | The real AP the ESP connects to |
+| `WIFI_PASS` | Your Wi-Fi password | WPA2 passphrase |
+| `BACKEND_MIC_URL` | `http://<BACKEND_LAN_IP>:5000/api/conversation` | Replace `10.13.37.1` with the backend server's actual LAN IP (e.g. `192.168.1.100`) |
+| `BACKEND_SPEAKER_URL` | `http://<BACKEND_LAN_IP>:5000/api/conversation` | Same IP as mic URL |
+
+Additional production considerations:
+
+- **Static IP or DHCP reservation** — assign a fixed LAN IP to the backend server so the firmware URL doesn't go stale.
+- **Firewall** — the backend machine must allow inbound TCP on port 5000 from the ESP's subnet.
+- **Backend bind address** — keep `PTT_ESP_AUDIO__HOST=0.0.0.0` so the server listens on the Wi-Fi interface (not just loopback).
+- **PTT button** — `PTT_BUTTON_ENABLED` in `voice_assistant.c` is `1` by default, which requires a physical momentary button on GPIO4. Set to `0` for auto-record mode during bench testing.
+- **Audio format** — the backend must return raw PCM: 16-bit signed little-endian, 16 kHz, mono. Any format mismatch produces noise, not errors.
+
+See `Docs/Audio Docs/BACKEND_INTEGRATION.md` for the full protocol specification, network diagrams, and troubleshooting table.
 
 ---
 

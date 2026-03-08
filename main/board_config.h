@@ -186,4 +186,71 @@
 
 #endif
 
+// ============================================================================
+//  SIMULATION MODE — Wokwi Audio Bridge
+//
+//  When set to 1, the mic and speaker drivers route I2S audio through a
+//  Python HTTP bridge on the host PC instead of using real I2S hardware.
+//  This lets you have a real voice conversation through the Wokwi simulator.
+//
+//  Set both to 0 when building for real hardware with physical I2S
+//  mic (e.g. INMP441) and speaker amp (e.g. MAX98357A).
+//
+//  Used by: mic_driver.c, speaker_driver.c
+// ============================================================================
+#define MIC_SIMULATE            1
+#define SPEAKER_SIMULATE        1
+
+// ============================================================================
+//  WIFI CREDENTIALS
+//
+//  SSID and password for the Wi-Fi network the ESP32 connects to.
+//
+//  Wokwi:     "Wokwi-GUEST" with an empty password (open network).
+//  Hardware:  your real Wi-Fi SSID and password.
+//
+//  Used by: wifi_driver.c
+// ============================================================================
+#define WIFI_SSID               "Wokwi-GUEST"
+#define WIFI_PASS               ""
+
+// ============================================================================
+//  BACKEND URLS — Voice Assistant Endpoint
+//
+//  BACKEND_MIC_URL: endpoint that receives recorded PCM audio via HTTP POST.
+//    The backend runs STT → LLM → TTS and stores the response PCM.
+//
+//  BACKEND_SPEAKER_URL: endpoint that returns the TTS audio response as
+//    raw PCM. The speaker driver streams and plays this.
+//
+//  Both URLs can point to the same endpoint (single-endpoint mode).
+//  The backend distinguishes mic upload vs speaker fetch by checking
+//  whether the request body is empty.
+//
+//  Wokwi:     use 10.13.37.1 (virtual gateway to host localhost)
+//  Hardware:  use the backend machine's LAN IP (e.g. 192.168.1.100)
+//
+//  Used by: voice_assistant.c
+// ============================================================================
+#define BACKEND_MIC_URL         "http://10.13.37.1:5000/api/conversation"
+#define BACKEND_SPEAKER_URL     "http://10.13.37.1:5000/api/conversation"
+
+// ============================================================================
+//  AUDIO BRIDGE URLS — Wokwi Simulation Only
+//
+//  When MIC_SIMULATE=1 or SPEAKER_SIMULATE=1, the mic/speaker drivers
+//  route I2S audio through a Python audio bridge running on the host PC
+//  instead of using real I2S hardware.
+//
+//  The bridge captures PC mic audio and plays back through PC speakers.
+//  See tools/audio_bridge/audio_bridge.py for the bridge server.
+//
+//  These are only used during Wokwi simulation. On real hardware
+//  (SIMULATE=0), these defines are ignored entirely.
+//
+//  Used by: mic_driver.c, speaker_driver.c
+// ============================================================================
+#define AUDIO_BRIDGE_MIC_URL      "http://10.13.37.1:8080/mic"
+#define AUDIO_BRIDGE_SPEAKER_URL  "http://10.13.37.1:8080/speaker"
+
 #endif /* BOARD_CONFIG_H */

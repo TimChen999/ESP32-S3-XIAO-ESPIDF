@@ -8,19 +8,13 @@
 #include "esp_log.h"
 #include "esp_http_client.h"
 
+// MIC_SIMULATE and AUDIO_BRIDGE_MIC_URL are set in board_config.h.
+// Fallbacks below apply only if board_config.h doesn't define them.
 #ifndef MIC_SIMULATE
 #define MIC_SIMULATE 0
 #endif
 
 #if MIC_SIMULATE
-// ── Audio bridge configuration ──────────────────────────────────────
-// URL of the Python audio bridge running on the host PC.
-// The bridge captures real audio from the PC mic and returns raw PCM.
-// See tools/audio_bridge/audio_bridge.py for the bridge server.
-//
-// Default uses Wokwi's gateway IP (10.13.37.1). Adjust if your setup
-// differs — try your machine's LAN IP or the Wokwi gateway address.
-// Can be overridden at build time via compiler flags (-D).
 #ifndef AUDIO_BRIDGE_MIC_URL
 #define AUDIO_BRIDGE_MIC_URL    "http://10.13.37.1:8080/mic"
 #endif

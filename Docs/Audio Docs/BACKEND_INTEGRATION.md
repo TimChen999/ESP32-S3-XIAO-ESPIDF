@@ -61,11 +61,12 @@ requests** per conversation turn. This is baked into the firmware:
   │  Step 6: Wait for playback to finish → loop back to Step 1
 ```
 
-The two URLs are defined at the top of `voice_assistant.c`:
+The two URLs are defined in `main/board_config.h` (centralised with all
+other board-specific settings):
 
 ```c
-#define BACKEND_MIC_URL         "http://your-backend.example.com/api/listen"
-#define BACKEND_SPEAKER_URL     "http://your-backend.example.com/api/speak"
+#define BACKEND_MIC_URL         "http://10.13.37.1:5000/api/conversation"
+#define BACKEND_SPEAKER_URL     "http://10.13.37.1:5000/api/conversation"
 ```
 
 ---
@@ -349,26 +350,37 @@ talk to each other. They both talk to the ESP32.
 
 ### Step-by-Step Setup (Wokwi)
 
-**1. Set the backend URLs in firmware**
+**1. Set the backend URLs and Wi-Fi in firmware**
 
-Edit `main/voice_assistant.c` — change the URL defines to point at your
-backend through the Wokwi gateway:
+All network configuration lives in `main/board_config.h`. Set the backend
+URLs to point at your backend through the Wokwi gateway, and set the
+Wi-Fi credentials for the simulated network:
 
 ```c
+// Backend
 #define BACKEND_MIC_URL         "http://10.13.37.1:5000/api/conversation"
 #define BACKEND_SPEAKER_URL     "http://10.13.37.1:5000/api/conversation"
+
+// Audio bridge (Wokwi simulation only)
+#define AUDIO_BRIDGE_MIC_URL    "http://10.13.37.1:8080/mic"
+#define AUDIO_BRIDGE_SPEAKER_URL "http://10.13.37.1:8080/speaker"
+
+// Wi-Fi
+#define WIFI_SSID               "Wokwi-GUEST"
+#define WIFI_PASS               ""
 ```
 
 `10.13.37.1` is Wokwi's virtual gateway that routes to your PC's
-`localhost`. The port (`5000`) must match the port your backend listens on.
+`localhost`. The ports must match the services running on your PC
+(`5000` for the backend, `8080` for the audio bridge).
 
 **2. Enable simulation mode**
 
-In your project's `CMakeLists.txt` (or via `idf.py menuconfig` / compiler
-flags), make sure the simulation defines are set:
+In `main/board_config.h`, make sure both simulation flags are set to 1:
 
-```cmake
-add_compile_definitions(MIC_SIMULATE=1 SPEAKER_SIMULATE=1)
+```c
+#define MIC_SIMULATE            1
+#define SPEAKER_SIMULATE        1
 ```
 
 This routes I2S reads/writes through the audio bridge instead of hardware.
@@ -474,37 +486,36 @@ audio directly. The backend runs on a separate machine on the same network.
 
 ### Step-by-Step Setup (Real Hardware)
 
-**1. Set the backend URLs in firmware**
+**1. Set the backend URLs and Wi-Fi in firmware**
 
-Edit `main/voice_assistant.c` — set both URLs to your backend's LAN IP:
+All network configuration lives in `main/board_config.h`. Set the backend
+URLs to your backend machine's LAN IP and your real Wi-Fi credentials:
 
 ```c
+// Backend — use your server's LAN IP
 #define BACKEND_MIC_URL         "http://192.168.1.100:5000/api/conversation"
 #define BACKEND_SPEAKER_URL     "http://192.168.1.100:5000/api/conversation"
+
+// Wi-Fi — your real network
+#define WIFI_SSID               "YourNetworkName"
+#define WIFI_PASS               "YourPassword"
 ```
 
 Replace `192.168.1.100` with the actual IP address of the machine running
 your backend. Use a static IP or DHCP reservation to prevent the IP from
-changing.
+changing. The audio bridge URLs can be left as-is — they are ignored when
+simulation mode is off.
 
 **2. Disable simulation mode**
 
-Make sure the simulation defines are OFF (they default to 0):
+In `main/board_config.h`, set both simulation flags to 0:
 
 ```c
-// In speaker_driver.c — should be:
-#define SPEAKER_SIMULATE 0
-
-// In mic_driver.c — should be:
-#define MIC_SIMULATE 0
+#define MIC_SIMULATE            0
+#define SPEAKER_SIMULATE        0
 ```
 
-Or simply don't set them — the drivers default to hardware mode.
-
-**3. Configure Wi-Fi credentials**
-
-Set your Wi-Fi SSID and password in the appropriate place (wifi_driver.c
-or sdkconfig).
+This makes the mic and speaker drivers use real I2S hardware.
 
 **4. Wire the hardware**
 
@@ -650,14 +661,21 @@ component and data transformation:
 
 ### On the ESP32 Firmware
 
-| Component              | Action           | Details                                       |
-|------------------------|------------------|-----------------------------------------------|
-| `BACKEND_MIC_URL`      | **Set URL**      | Point to your backend's address and port      |
-| `BACKEND_SPEAKER_URL`  | **Set URL**      | Same URL as mic (single endpoint)             |
-| `MIC_SIMULATE`         | **Set 0 or 1**   | 1 for Wokwi, 0 for real hardware              |
-| `SPEAKER_SIMULATE`     | **Set 0 or 1**   | 1 for Wokwi, 0 for real hardware              |
-| Wi-Fi credentials      | **Configure**    | Set SSID/password for your network            |
-| Everything else        | **No changes**   | Drivers, tasks, state machines all stay as-is |
+All network configuration is centralised in `main/board_config.h`:
+
+| Define in `board_config.h`  | Action           | Details                                       |
+|-----------------------------|------------------|-----------------------------------------------|
+| `BACKEND_MIC_URL`           | **Set URL**      | Point to your backend's address and port      |
+| `BACKEND_SPEAKER_URL`       | **Set URL**      | Same URL as mic (single endpoint)             |
+| `AUDIO_BRIDGE_MIC_URL`      | **Set URL**      | Audio bridge mic endpoint (Wokwi only)        |
+| `AUDIO_BRIDGE_SPEAKER_URL`  | **Set URL**      | Audio bridge speaker endpoint (Wokwi only)    |
+| `WIFI_SSID`                 | **Set SSID**     | Wi-Fi network name                            |
+| `WIFI_PASS`                 | **Set password** | Wi-Fi password (empty for Wokwi-GUEST)        |
+
+| `MIC_SIMULATE`              | **Set 0 or 1**   | 1 for Wokwi, 0 for real hardware              |
+| `SPEAKER_SIMULATE`          | **Set 0 or 1**   | 1 for Wokwi, 0 for real hardware              |
+
+Everything else (drivers, tasks, state machines) stays as-is.
 
 ---
 
@@ -723,7 +741,7 @@ is still generating the rest of the response.
 | `Backend returned HTTP 4xx/5xx`    | Backend error                              | Check backend logs. Verify endpoint path matches.              |
 | Speaker plays noise/static         | Audio format mismatch                      | Ensure TTS output is transcoded to s16le, 16 kHz, mono.        |
 | Speaker plays silence              | Backend returned empty body                | Check that speaker fetch returns PCM, not empty 200.           |
-| `No audio captured`               | Mic not recording                          | Check I2S wiring. Check `MIC_SIMULATE` matches your setup.     |
+| `No audio captured`               | Mic not recording                          | Check I2S wiring. Check `MIC_SIMULATE` in board_config.h.      |
 | Audio cuts out / choppy            | Network too slow for real-time streaming   | Increase `RING_BUFFER_SIZE` in speaker_driver.c.               |
 | `HTTP read error` during playback  | Backend closed connection early            | Ensure backend sends complete PCM before closing.              |
 | Wokwi can't reach backend          | Backend bound to 127.0.0.1                 | Bind to `0.0.0.0` so Wokwi gateway can route to it.           |
@@ -745,10 +763,16 @@ is still generating the rest of the response.
 
   ESP32 FIRMWARE:
   ───────────────
-  main/voice_assistant.c        ← Set BACKEND_MIC_URL and BACKEND_SPEAKER_URL
-  main/speaker_driver.c         ← Set SPEAKER_SIMULATE (0 or 1)
-  main/mic_driver.c             ← Set MIC_SIMULATE (0 or 1)
-  main/wifi_driver.c            ← Set Wi-Fi SSID and password (if needed)
+  main/board_config.h           ← All network config in one place:
+    ├── BACKEND_MIC_URL             backend conversation endpoint
+    ├── BACKEND_SPEAKER_URL         backend conversation endpoint
+    ├── AUDIO_BRIDGE_MIC_URL        audio bridge mic (Wokwi only)
+    ├── AUDIO_BRIDGE_SPEAKER_URL    audio bridge speaker (Wokwi only)
+    ├── WIFI_SSID                   Wi-Fi network name
+    └── WIFI_PASS                   Wi-Fi password
+
+    ├── MIC_SIMULATE                simulation mode (1 = Wokwi, 0 = hardware)
+    └── SPEAKER_SIMULATE            simulation mode (1 = Wokwi, 0 = hardware)
 ```
 
 No other firmware files need to be modified.
@@ -780,18 +804,24 @@ purposes:
 The two services are independent. The ESP32 talks to both, but they never
 talk to each other.
 
-### Q: What needs to be configured on the backend side?
+### Q: What needs to be configured to connect the ESP32 to the backend?
 
-Two categories of changes:
+**On the ESP32 (firmware side):**
 
-**Configuration:**
+All network settings are centralised in `main/board_config.h`:
+
+- `BACKEND_MIC_URL` / `BACKEND_SPEAKER_URL` — point to your backend's
+  address and port. Both can be the same URL for single-endpoint mode.
+- `AUDIO_BRIDGE_MIC_URL` / `AUDIO_BRIDGE_SPEAKER_URL` — the audio bridge
+  endpoints. Only used during Wokwi simulation; ignored on real hardware.
+- `WIFI_SSID` / `WIFI_PASS` — the Wi-Fi network the ESP32 joins.
+- `MIC_SIMULATE` / `SPEAKER_SIMULATE` — set to 1 for Wokwi, 0 for real
+  hardware.
+
+**On the backend (Python side):**
 
 - Bind the Flask server to `0.0.0.0` (all network interfaces) on port
-  `5000`. The port must match whatever `BACKEND_MIC_URL` /
-  `BACKEND_SPEAKER_URL` specify in the firmware.
-
-**Code changes:**
-
+  `5000`. The port must match the port in the firmware's backend URLs.
 - Expose a single `POST /api/conversation` endpoint. When the request body
   contains audio data, treat it as a mic upload (run STT → LLM → TTS and
   store the result). When the body is empty, return the previously stored

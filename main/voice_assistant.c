@@ -102,19 +102,15 @@ static const char *TAG = "VOICE_ASST";
 // ============================================================================
 //  BACKEND CONFIGURATION
 //
-//  BACKEND_MIC_URL: endpoint that receives recorded PCM audio via HTTP POST.
-//    The backend runs: STT (speech-to-text) → LLM → TTS → PCM response.
-//    Request body: raw PCM bytes (s16le, matching mic driver's AUDIO_PRESET).
-//    Response: 200 OK (response audio fetched separately by speaker driver).
-//
-//  BACKEND_SPEAKER_URL: endpoint that returns the audio response as
-//    chunked raw PCM. The speaker driver streams and plays this.
-//
-//  These may be the same URL (backend handles both upload and response)
-//  or different endpoints. Adjust to match your backend API.
+//  BACKEND_MIC_URL and BACKEND_SPEAKER_URL are set in board_config.h.
+//  The fallbacks below apply only if board_config.h doesn't define them.
 // ============================================================================
+#ifndef BACKEND_MIC_URL
 #define BACKEND_MIC_URL         "http://your-backend.example.com/api/listen"
+#endif
+#ifndef BACKEND_SPEAKER_URL
 #define BACKEND_SPEAKER_URL     "http://your-backend.example.com/api/speak"
+#endif
 
 // ============================================================================
 //  BUTTON HELPERS

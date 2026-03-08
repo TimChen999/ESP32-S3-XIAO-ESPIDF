@@ -8,19 +8,13 @@
 #include "esp_log.h"
 #include "esp_http_client.h"
 
+// SPEAKER_SIMULATE and AUDIO_BRIDGE_SPEAKER_URL are set in board_config.h.
+// Fallbacks below apply only if board_config.h doesn't define them.
 #ifndef SPEAKER_SIMULATE
 #define SPEAKER_SIMULATE 0
 #endif
 
 #if SPEAKER_SIMULATE
-// ── Audio bridge configuration ──────────────────────────────────────
-// URL of the Python audio bridge running on the host PC.
-// The bridge plays received PCM audio through the PC's speakers.
-// See tools/audio_bridge/audio_bridge.py for the bridge server.
-//
-// Default uses Wokwi's gateway IP (10.13.37.1). Adjust if your setup
-// differs — try your machine's LAN IP or the Wokwi gateway address.
-// Can be overridden at build time via compiler flags (-D).
 #ifndef AUDIO_BRIDGE_SPEAKER_URL
 #define AUDIO_BRIDGE_SPEAKER_URL  "http://10.13.37.1:8080/speaker"
 #endif
