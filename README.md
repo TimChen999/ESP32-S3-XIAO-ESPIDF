@@ -4,13 +4,13 @@ A cellular modem simulator that runs entirely on the ESP32-S3. Two UARTs are cro
 
 ---
 
-## Setup via VS Code (recommended)
+## Setup via VS Code / Cursor (recommended)
 
-You can do everything through VS Code without installing ESP-IDF separately.
+You can do everything through VS Code (or Cursor) without installing ESP-IDF separately. All steps below work identically in both editors.
 
 ### 1. Install the ESP-IDF extension
 
-1. Open VS Code (or Cursor).
+1. Open VS Code or Cursor.
 2. Go to **Extensions** (Ctrl+Shift+X).
 3. Search for **ESP-IDF** and install **Espressif IDF** (`espressif.esp-idf-extension`).
 
@@ -27,13 +27,13 @@ The extension installs ESP-IDF and the toolchain for you. No manual `export` scr
 
 ### 3. Open the project and set target
 
-1. Open this project folder in VS Code.
+1. Open this project folder in VS Code / Cursor.
 2. Press **Ctrl+Shift+P** → **ESP-IDF: Set Espressif Device Target**.
 3. Select **esp32s3**.
 
 ### 4. Build, flash, and monitor
 
-Use the **ESP-IDF** buttons in the bottom status bar, or:
+Use the **ESP-IDF** buttons in the bottom status bar (VS Code) or the Command Palette (Ctrl+Shift+P) in Cursor:
 
 | Action   | Command Palette                          |
 |----------|------------------------------------------|
@@ -63,7 +63,7 @@ You can run the firmware in the Wokwi simulator (no hardware needed).
 
 ### 3. Build the firmware
 
-Build the project first (via ESP-IDF extension or `idf.py build`). Wokwi uses the binaries in `build/`.
+Build the project first: press Ctrl+Shift+P → **ESP-IDF: Build your project**. Wokwi uses the binaries in `build/`.
 
 ### 4. Start the simulator
 
@@ -204,14 +204,34 @@ new terminal window:
 # Linux/macOS
 . $HOME/esp/esp-idf/export.sh
 
-# Windows (PowerShell)
-C:\esp\v5.5.3\esp-idf\export.ps1
-
 # Windows (cmd)
 C:\esp\v5.5.3\esp-idf\export.bat
 ```
 
 After this, `idf.py` should be available.
+
+> **Windows PowerShell / Cursor note:** The `export.ps1` and `export.bat`
+> scripts have a known bug where they misidentify Cursor's PowerShell as
+> `cmd.exe` and fail to set the PATH. Use one of these workarounds:
+>
+> **Option A (recommended):** Skip the terminal — use Ctrl+Shift+P →
+> **ESP-IDF: Build your project**. The extension manages its own
+> environment and works in both VS Code and Cursor.
+>
+> **Option B:** Set up the environment manually in PowerShell (once per
+> session), then build normally:
+>
+> ```powershell
+> $env:IDF_PATH = "C:\esp\v5.5.3\esp-idf"
+> $env:IDF_PYTHON_ENV_PATH = (& python "$env:IDF_PATH\tools\idf_tools.py" export --format key-value 2>$null | Select-String "IDF_PYTHON_ENV_PATH=(.+)" | ForEach-Object { $_.Matches.Groups[1].Value })
+> $idfToolPaths = (& python "$env:IDF_PATH\tools\idf_tools.py" export --format key-value 2>$null | Select-String "^PATH=(.+);%PATH%" | ForEach-Object { $_.Matches.Groups[1].Value })
+> $env:PATH = "$idfToolPaths;$env:PATH"
+> idf.py build
+> ```
+>
+> **Option C:** Open a **Command Prompt** terminal (not PowerShell) via
+> Terminal → New Terminal → dropdown → Command Prompt, then use the
+> `export.bat` command above.
 
 ### 3. Build and flash
 
