@@ -88,20 +88,41 @@ static void time_sync_notification_cb(struct timeval *tv)
 
 void network_app_init(void)
 {
+    // Allocates FreeRTOS event group
+    // This is a shared set of flag bits: IP_READY_BIT, TIME_SYNC_BIT
+    // Any task in the system can block on these bits (via xEventGroupWaitBits)
+    // Allows tasks to block on these bits and wake up when ready without polling
     s_network_event_group = xEventGroupCreate();
 
     /* Step 0a: Register event handler for any IP event (covers both Wi-Fi and PPP)
-     * This ensures our on_ip_event() is called when the network layer fully connects. */
+     * Tells event bus: whenever any IP event fires, call on_ip_event()
+     * Covers IP_EVENT_STA_GOT_IP (WiFi) and IP_EVENT_PPP_GOT_IP (PPP)
+     * Registered now so on_ip_event() can be called as soon as network layer
+     * fully connects (when WIFI or PPP drivers finish obtaining IP) 
+     *
+     * Note: Needs to be done before, or IP events can fire with no one listening */
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
                                                         ESP_EVENT_ANY_ID,
                                                         &on_ip_event,
                                                         NULL,
                                                         NULL));
 
-    /* Step 0b: Configure SNTP (starts automatically when IP is available)
-     * Even though we don't have an IP address yet, we can initialize SNTP here.
-     * The underlying stack will wait until the default network interface is UP
-     * before it tries to send its UDP packets to fetch the time. */
+    /* Step 0b: Set the system clock via NTP (needed for HTTPS)
+     *
+     * HTTPS/TLS requires a valid system clock to verify certificate expiry
+     * dates. Without it, every certificate looks expired and TLS handshakes
+     * fail. Plain HTTP does not need this.
+     *
+     * SNTP is configured here but won't send any packets until Wi-Fi/PPP
+     * obtains an IP. Once online, it queries NTP servers over UDP, sets the
+     * system clock, and fires time_sync_notification_cb (which sets
+     * TIME_SYNC_BIT so waiting tasks can proceed) automatically.
+     *
+     * Note: Doesn't strictly require doing before IP, done for convenience
+     *
+     * Disabled for Wokwi (ENABLE_TIME_SYNC=0) because Wokwi blocks
+     * outbound UDP, which would cause SNTP to hang forever. When disabled,
+     * TIME_SYNC_BIT is set immediately in on_ip_event instead. */
 #if ENABLE_TIME_SYNC
     ESP_LOGI(TAG, "Initializing SNTP...");
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
@@ -109,7 +130,7 @@ void network_app_init(void)
     esp_sntp_setservername(1, "time.nist.gov");
     sntp_set_time_sync_notification_cb(time_sync_notification_cb);
     esp_sntp_init();
-    
+
     // Set timezone to UTC. (Example for EST: setenv("TZ", "EST5EDT,M3.2.0/2,M11.1.0", 1); tzset();)
     setenv("TZ", "UTC", 1);
     tzset();
@@ -122,6 +143,8 @@ void network_app_wait_for_connection(void)
 {
     ESP_LOGI(TAG, "Waiting for network IP...");
     // Wait for the IP_READY_BIT to be set
+    // This is what should be provided by either WiFi or PPP driver
+    // Everything from here on out is agnostic to the underlying network technology
     xEventGroupWaitBits(s_network_event_group, IP_READY_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
     ESP_LOGI(TAG, "Network is ready.");
 }
@@ -130,7 +153,8 @@ void network_app_wait_for_time_sync(void)
 {
     ESP_LOGI(TAG, "Waiting for time synchronization (SNTP)...");
     /* Step 2b: Wait for the TIME_SYNC_BIT to be set by time_sync_notification_cb().
-     * This blocks our application task until SNTP has successfully fetched the time. */
+     * This blocks our application task until SNTP has successfully fetched the time. 
+     * Note: This is all ran in library code, SNTP runs inside lwIP's internal task */
     xEventGroupWaitBits(s_network_event_group, TIME_SYNC_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
     
     time_t now;

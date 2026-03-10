@@ -27,9 +27,17 @@ void app_main(void)
     printf("  Cellular Modem Simulator — ESP32-S3\n");
     printf("========================================\n\n");
 
+    // ESP library: enables TCP/IP stack
+    // Uses lw(lightweight) IP, a small TCP/IP stack for embedded systems
+    // Allows use of standard sockers, HTTP clients, DNS without manual code
     ESP_ERROR_CHECK(esp_netif_init());
+
+    // ESP library: creates system event bus
+    // All events (WiFi, PPP, etc.) are sent to this bus
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    // Sets up event listener and SNTP client before IP
+    // They will be run via ESP library once IP is obtained
     network_app_init();
 
     // OPTION A: Wi-Fi
@@ -58,11 +66,13 @@ void app_main(void)
     xTaskCreatePinnedToCore(voice_assistant_task, "voice_asst",
         TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL, DRIVER_CORE);
 
+    // Diagnostics, doesn't establish connections, just waits/blocks for IP, time sync, sends one HTTP
     xTaskCreatePinnedToCore(network_app_task, "app_task",
         TASK_STACK_SIZE * 2, NULL, TASK_PRIORITY - 1, NULL, DRIVER_CORE);
 
-    xTaskCreatePinnedToCore(test_network_task, "test_task",
-        TASK_STACK_SIZE * 2, NULL, TASK_PRIORITY - 1, NULL, DRIVER_CORE);
+    // Test network task, not needed for now
+    // xTaskCreatePinnedToCore(test_network_task, "test_task",
+    //     TASK_STACK_SIZE * 2, NULL, TASK_PRIORITY - 1, NULL, DRIVER_CORE);
 
     ESP_LOGI(TAG, "Tasks launched. Returning to FreeRTOS scheduler.");
 }
